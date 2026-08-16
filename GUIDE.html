@@ -1,0 +1,731 @@
+<title>GemMCP Setup</title>
+<style>
+  :root {
+    --ground:      #eef1f4;
+    --surface:     #ffffff;
+    --surface-alt: #e4e9ee;
+    --ink:         #161c23;
+    --ink-soft:    #4a5764;
+    --ink-faint:   #7b8794;
+    --rule:        #ccd5dd;
+    --accent:      #12617f;
+    --accent-soft: #d7e7ee;
+    --warn:        #8a5a06;
+    --warn-soft:   #f6e8cc;
+    --danger:      #93242b;
+    --danger-soft: #f6dcdc;
+    --good:        #1f6b45;
+    --code-bg:     #182029;
+    --code-ink:    #dbe4ec;
+    --code-dim:    #7f8f9e;
+
+    --sans: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    --mono: "Cascadia Code", Consolas, "SF Mono", ui-monospace, Menlo, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:      #10151b;
+      --surface:     #171e26;
+      --surface-alt: #1f2830;
+      --ink:         #e6ecf2;
+      --ink-soft:    #a9b6c3;
+      --ink-faint:   #7a8794;
+      --rule:        #2c3742;
+      --accent:      #63b8d8;
+      --accent-soft: #17323d;
+      --warn:        #e0ab53;
+      --warn-soft:   #322613;
+      --danger:      #eb8b8b;
+      --danger-soft: #331a1c;
+      --good:        #6fc79b;
+      --code-bg:     #0b1015;
+      --code-ink:    #dbe4ec;
+      --code-dim:    #6d7c8b;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground:      #10151b;
+    --surface:     #171e26;
+    --surface-alt: #1f2830;
+    --ink:         #e6ecf2;
+    --ink-soft:    #a9b6c3;
+    --ink-faint:   #7a8794;
+    --rule:        #2c3742;
+    --accent:      #63b8d8;
+    --accent-soft: #17323d;
+    --warn:        #e0ab53;
+    --warn-soft:   #322613;
+    --danger:      #eb8b8b;
+    --danger-soft: #331a1c;
+    --good:        #6fc79b;
+    --code-bg:     #0b1015;
+    --code-ink:    #dbe4ec;
+    --code-dim:    #6d7c8b;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16.5px;
+    line-height: 1.62;
+    direction: rtl;
+    text-align: right;
+  }
+
+  .wrap {
+    max-width: 60rem;
+    margin: 0 auto;
+    padding: 3.5rem 1.5rem 6rem;
+  }
+
+  /* ---------- masthead ---------- */
+  .masthead {
+    border-bottom: 3px solid var(--ink);
+    padding-bottom: 1.75rem;
+    margin-bottom: 2.5rem;
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 0.9rem;
+  }
+  h1 {
+    font-size: clamp(2rem, 5.5vw, 3rem);
+    line-height: 1.1;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin: 0 0 0.85rem;
+    text-wrap: balance;
+  }
+  .standfirst {
+    font-size: 1.1rem;
+    color: var(--ink-soft);
+    margin: 0;
+    max-width: 46rem;
+  }
+
+  /* ---------- generic blocks ---------- */
+  h2 {
+    font-size: 1.5rem;
+    font-weight: 680;
+    letter-spacing: -0.015em;
+    margin: 0;
+    text-wrap: balance;
+  }
+  h3 {
+    font-size: 1.05rem;
+    font-weight: 670;
+    margin: 0 0 0.5rem;
+  }
+  p { margin: 0 0 1rem; max-width: 46rem; }
+  p:last-child { margin-bottom: 0; }
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible, button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+  }
+
+  ul, ol { max-width: 46rem; padding-inline-start: 1.3rem; margin: 0 0 1rem; }
+  li { margin-bottom: 0.4rem; }
+  li:last-child { margin-bottom: 0; }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.86em;
+    background: var(--surface-alt);
+    padding: 0.12em 0.4em;
+    border-radius: 3px;
+    direction: ltr;
+    display: inline-block;
+  }
+
+  pre {
+    background: var(--code-bg);
+    color: var(--code-ink);
+    font-family: var(--mono);
+    font-size: 0.83rem;
+    line-height: 1.6;
+    padding: 1rem 1.15rem;
+    border-radius: 5px;
+    overflow-x: auto;
+    direction: ltr;
+    text-align: left;
+    margin: 0 0 1rem;
+  }
+  pre:last-child { margin-bottom: 0; }
+  pre code { background: none; padding: 0; font-size: 1em; display: inline; }
+  pre .c { color: var(--code-dim); }
+
+  /* ---------- intro panel ---------- */
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 1.5rem 1.6rem;
+    margin-bottom: 2.5rem;
+  }
+  .flow {
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    line-height: 2.1;
+    color: var(--ink-soft);
+    direction: ltr;
+    text-align: left;
+    overflow-x: auto;
+    margin: 1rem 0 0;
+    padding: 0.9rem 1rem;
+    background: var(--surface-alt);
+    border-radius: 4px;
+  }
+  .flow b { color: var(--accent); font-weight: 600; }
+
+  /* ---------- steps ---------- */
+  .steps {
+    display: flex;
+    flex-direction: column;
+    gap: 2.25rem;
+    margin-bottom: 3rem;
+  }
+  .step {
+    display: grid;
+    grid-template-columns: 3rem 1fr;
+    gap: 0 1.1rem;
+    align-items: start;
+  }
+  .step-num {
+    font-family: var(--mono);
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-radius: 4px;
+    text-align: center;
+    padding: 0.3rem 0;
+    font-variant-numeric: tabular-nums;
+  }
+  .step-body { min-width: 0; display: flex; flex-direction: column; gap: 0.75rem; }
+  .step-body > * { margin-bottom: 0; }
+
+  /* ---------- callouts ---------- */
+  .note {
+    border-radius: 5px;
+    padding: 1rem 1.15rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+  }
+  .note > * { margin-bottom: 0; max-width: none; }
+  .note-label {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    font-weight: 600;
+  }
+  .note.warn   { background: var(--warn-soft);   border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); }
+  .note.warn   .note-label { color: var(--warn); }
+  .note.danger { background: var(--danger-soft); border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent); }
+  .note.danger .note-label { color: var(--danger); }
+  .note.info   { background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); }
+  .note.info   .note-label { color: var(--accent); }
+
+  /* ---------- patches ---------- */
+  .section-head {
+    border-top: 1px solid var(--rule);
+    padding-top: 1.5rem;
+    margin-bottom: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .patch {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 1.35rem 1.5rem;
+    margin-bottom: 1.25rem;
+  }
+  .patch-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.6rem;
+    margin-bottom: 0.35rem;
+  }
+  .patch-file {
+    font-family: var(--mono);
+    font-size: 0.86rem;
+    font-weight: 600;
+    color: var(--accent);
+    direction: ltr;
+  }
+  .symptom {
+    font-size: 0.9rem;
+    color: var(--ink-soft);
+    border-inline-start: 3px solid var(--rule);
+    padding-inline-start: 0.75rem;
+    margin: 0 0 0.9rem;
+  }
+
+  /* ---------- table ---------- */
+  .table-scroll { overflow-x: auto; margin-bottom: 1rem; }
+  table { border-collapse: collapse; width: 100%; min-width: 30rem; font-size: 0.93rem; }
+  th, td { text-align: right; padding: 0.6rem 0.8rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    font-weight: 600;
+    border-bottom: 2px solid var(--rule);
+  }
+  tr:last-child td { border-bottom: none; }
+
+  footer {
+    border-top: 1px solid var(--rule);
+    margin-top: 3rem;
+    padding-top: 1.25rem;
+    font-size: 0.85rem;
+    color: var(--ink-faint);
+  }
+
+  @media (max-width: 34rem) {
+    .step { grid-template-columns: 1fr; gap: 0.6rem; }
+    .step-num { justify-self: start; padding: 0.2rem 0.7rem; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <p class="eyebrow">GemMCP 2.0.1 · Windows</p>
+    <h1>התקנת GemMCP מאפס</h1>
+    <p class="standfirst">
+      GemMCP נותן ל־Gemini Web ידיים: הוא מחבר את הצ׳אט בדפדפן לשרת מקומי קטן שרץ על המחשב,
+      וכך בקשה בעברית פשוטה הופכת לפעולה אמיתית — פתיחת תוכנה, קריאת קובץ, שאילתת SQL.
+      המדריך הזה כולל שלושה תיקוני באגים שהגרסה הרשמית סובלת מהם.
+    </p>
+  </header>
+
+  <div class="panel">
+    <h3>איך זה עובד</h3>
+    <p>
+      התוסף מזריק לשיחה הנחיות שמתארות ל־Gemini אילו כלים קיימים. כשאתה מבקש משהו,
+      Gemini לא עונה בטקסט אלא פולט פקודת JSON. התוסף תופס אותה, מציג לך אישור,
+      ומעביר לשרת המקומי שמבצע בפועל.
+    </p>
+    <div class="flow">
+"פתח מחשבון"<br>
+   ↓<br>
+Gemini → <b>{"service":"windows","action":"open_app","app_name":"calc"}</b><br>
+   ↓  התוסף תופס ומבקש אישור<br>
+   ↓  background.js → <b>localhost:3000</b><br>
+Windows מפעיל את התוכנה<br>
+   ↓  התוצאה חוזרת לשיחה<br>
+Gemini: "המחשבון נפתח ומוכן לשימוש."
+    </div>
+  </div>
+
+  <div class="note info" style="margin-bottom:2.5rem;">
+    <span class="note-label">הדרך הקצרה</span>
+    <p>
+      אם יש לך גישה למחשב שכבר עבר את התהליך — פשוט העתק ממנו את שתי התיקיות
+      <code>GemMCP</code> ו־<code>GemMCP-extension</code> ודלג ישר לשלב 4.
+      הן כבר כוללות את שלושת התיקונים, ואז אין צורך לגעת בקוד בכלל.
+    </p>
+  </div>
+
+  <h2 style="margin-bottom:1.25rem;">מה צריך לפני שמתחילים</h2>
+  <ul style="margin-bottom:2.5rem;">
+    <li><strong>Node.js 18 ומעלה</strong> — בדוק עם <code>node --version</code>. אם אין, התקן מ־<a href="https://nodejs.org">nodejs.org</a>.</li>
+    <li><strong>Chrome</strong> או כל דפדפן מבוסס Chromium (Edge, Brave).</li>
+    <li><strong>Windows</strong> — השרת המקומי כתוב לפעולות Windows בלבד.</li>
+  </ul>
+
+  <div class="steps">
+
+    <div class="step">
+      <div class="step-num">1</div>
+      <div class="step-body">
+        <h2>חלץ לתיקייה קבועה</h2>
+        <p>
+          הורד את ה־ZIP וחלץ אותו למקום שלא תזיז אחר כך — למשל <code>C:\Users\&lt;שם&gt;\GemMCP</code>.
+          Chrome זוכר את הנתיב, והזזת התיקייה תשבור את התוסף.
+        </p>
+        <div class="note warn">
+          <span class="note-label">אל תחלץ לתיקיית הורדות</span>
+          <p>תיקיות שמתנקות אוטומטית או מסתנכרנות ל־OneDrive גורמות לתקלות. בחר מיקום יציב.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <h2>התקן את תלויות השרת</h2>
+        <p>פתח PowerShell בתיקיית <code>bridge-server</code> והרץ:</p>
+        <pre><code>cd C:\Users\&lt;שם&gt;\GemMCP\bridge-server
+npm install</code></pre>
+        <p>אמורות להתקין כ־94 חבילות. עכשיו צור קובץ <code>.env</code> באותה תיקייה:</p>
+        <pre><code>PORT=3000
+
+<span class="c"># הרשאות ברירת מחדל בצד השרת</span>
+WIN_PERM_READ=true
+WIN_PERM_WRITE=false
+WIN_PERM_COMMANDS=false
+WIN_PERM_APPS=true
+WIN_PERM_CLIPBOARD=true
+
+<span class="c"># הגבלת גישה לקבצים לעץ תיקיות אחד. השאר ריק = כל הדיסק.</span>
+WIN_ALLOWED_PATH=C:\Users\&lt;שם&gt;\Desktop</code></pre>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <h2>החל את שלושת התיקונים</h2>
+        <p>
+          גרסה 2.0.1 מגיעה עם שלושה באגים אמיתיים — אחד מהם משבית קובץ שלם.
+          הפירוט המדויק נמצא <a href="#patches">בהמשך הדף</a>. אל תדלג על השלב הזה.
+        </p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">4</div>
+      <div class="step-body">
+        <h2>הכן תיקיית תוסף נפרדת</h2>
+        <p>
+          זה השלב שרוב האנשים נכשלים בו. אם תטען ל־Chrome את <code>GemMCP</code> המלאה,
+          הוא ינסה לבלוע גם את <code>bridge-server\node_modules</code> — למעלה מ־1,300 קבצים
+          שאינם חלק מהתוסף.
+        </p>
+        <p>צור תיקייה נפרדת בשם <code>GemMCP-extension</code> והעתק אליה <strong>רק</strong> את אלה:</p>
+        <pre><code>manifest.json    background.js    content.js
+content.css      i18n.js          prompt.js
+icons\           popup\</code></pre>
+        <p>סך הכול 15 קבצים. <code>manifest.json</code> חייב לשבת ישירות בשורש התיקייה.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">5</div>
+      <div class="step-body">
+        <h2>טען את התוסף ב־Chrome</h2>
+        <ol>
+          <li>גש לכתובת <code>chrome://extensions</code></li>
+          <li>הפעל את <strong>מצב מפתח</strong> (מתג ימני־עליון)</li>
+          <li>לחץ <strong>טען פריט שלא נארז</strong></li>
+          <li>בחר את התיקייה <code>GemMCP-extension</code> — סמן אותה בלחיצה אחת, אל תיכנס לתוכה</li>
+          <li>נעץ את התוסף לסרגל הכלים דרך אייקון הפאזל</li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">6</div>
+      <div class="step-body">
+        <h2>הפעל את שרת הגשר</h2>
+        <p>לחיצה כפולה על <code>start-bridge.bat</code> בתיקייה הראשית. לבדיקה שהוא באוויר:</p>
+        <pre><code>curl http://127.0.0.1:3000/api/health</code></pre>
+        <p>התשובה אמורה להיות <code>{"status":"ok",...}</code>.</p>
+        <p>
+          רוצה שיעלה לבד בכל הדלקה? הרץ את <code>register-protocol.bat</code>,
+          וצור קיצור אל <code>bridge-launcher-silent.vbs</code> בתיקיית ה־Startup
+          (<code>Win+R</code> ואז <code>shell:startup</code>).
+        </p>
+        <div class="note warn">
+          <span class="note-label">שקול טוב לפני הפעלה אוטומטית</span>
+          <p>
+            כל עוד הגשר רץ, הוא מקבל פקודות. הפעלה ידנית רק כשצריך היא הבחירה הבטוחה יותר —
+            ראה את פרק האבטחה למטה.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">7</div>
+      <div class="step-body">
+        <h2>כבה את ההרצה האוטומטית</h2>
+        <p>
+          פתח <a href="https://gemini.google.com">gemini.google.com</a>, לחץ על תג <strong>GemMCP</strong>
+          בפינה, והורד את הסימון מ־<strong>Auto-Run Approval</strong>.
+        </p>
+        <div class="note danger">
+          <span class="note-label">זה דלוק כברירת מחדל</span>
+          <p>
+            כשהמתג מסומן, כל פקודה ש־Gemini מחליט לפלוט רצה על המחשב <strong>לפני</strong> שאתה רואה אותה.
+            כשהוא כבוי מופיע כרטיס <strong>"אשר והרץ"</strong> עם ה־JSON המלא, ואתה מחליט.
+            ההגדרה נשמרת, אז זו לחיצה חד־פעמית.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">8</div>
+      <div class="step-body">
+        <h2>בדיקה ראשונה</h2>
+        <p>
+          בפאנל של GemMCP ודא ש־<strong>Windows Server</strong> מסומן כ״פעיל ומחובר״,
+          לחץ <strong>Activate GemMCP</strong> כדי להזריק את ההנחיות לשיחה, ואז כתוב:
+        </p>
+        <pre><code>פתח מחשבון</code></pre>
+        <p>
+          אמור לקפוץ כרטיס אישור. אשר אותו — המחשבון ייפתח, התוצאה תישלח לבד חזרה לשיחה,
+          ו־Gemini יגיב עליה. זו הפעולה הכי לא מזיקה שיש, ולכן היא בדיקת השפיות הנכונה.
+        </p>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ================= PATCHES ================= -->
+  <div id="patches" class="section-head">
+    <p class="eyebrow">שלב 3 · במלואו</p>
+    <h2>שלושת התיקונים</h2>
+    <p style="color:var(--ink-soft);">
+      כל השלושה אומתו על התקנה חיה. אם תעדכן גרסה בעתיד דרך <code>update.bat</code>,
+      התיקונים יידרסו ותצטרך להחיל אותם מחדש.
+    </p>
+  </div>
+
+  <div class="patch">
+    <div class="patch-head">
+      <span class="patch-file">popup/oauth-success.js</span>
+      <span style="color:var(--ink-faint); font-size:0.85rem;">סוגר יתום</span>
+    </div>
+    <p class="symptom">התסמין: הקובץ שבור תחבירית ולא נטען כלל, ולכן דף הסיום של התחברות OAuth לא עובד.</p>
+    <p>סביב שורה 102 יש בלוק טיימר שמסתיים בסוגר <code>}</code> בלי פתיחה תואמת. הוסף מעליו את השורה החסרה:</p>
+<pre><code>if (!err) {
+  let timeLeft = 3;
+  const interval = setInterval(() =&gt; {
+    timeLeft -= 1;
+    if (timerSeconds) timerSeconds.textContent = timeLeft;
+    if (timeLeft &lt;= 0) {
+      clearInterval(interval);
+      closeThisTab();
+    }
+  }, 1000);
+}</code></pre>
+    <p style="font-size:0.9rem; color:var(--ink-soft);">
+      זה גם משחזר את הכוונה המקורית — הטיימר לא אמור לרוץ בדף שגיאה.
+    </p>
+  </div>
+
+  <div class="patch">
+    <div class="patch-head">
+      <span class="patch-file">bridge-server/server.js</span>
+      <span style="color:var(--ink-faint); font-size:0.85rem;">‎open_app‎ מדווח הצלחה כוזבת ונתקע</span>
+    </div>
+    <p class="symptom">
+      התסמין: שם תוכנה שגוי מחזיר "הופעל בהצלחה" בלי שנפתח כלום — ובמקרים אחרים
+      הבקשה לא חוזרת לעולם ומשאירה תהליך <code>cmd</code> תלוי לנצח.
+    </p>
+    <p>
+      השורש: הקוד הסיק הצלחה מקוד היציאה של <code>start</code>, שמחזירה <strong>תמיד</strong> אפס.
+      החלף את קריאת ה־<code>exec</code> שבתוך <code>case 'open_app'</code> בבדיקת קיום מראש:
+    </p>
+<pre><code>const LAUNCH_TIMEOUT_MS = 5000;
+
+const reportLaunched = () =&gt;
+  res.json({ success: true, data: { message: `היישום '${appTarget}' הופעל בהצלחה ב-Windows!` } });
+
+const launchTarget = () =&gt; {
+  exec(targetCommand, { windowsHide: false, timeout: LAUNCH_TIMEOUT_MS, killSignal: 'SIGKILL' }, (cmdErr) =&gt; {
+    if (!cmdErr) return reportLaunched();
+
+    if (cmdErr.killed) {
+      return res.status(504).json({
+        success: false,
+        error: `פתיחת '${appTarget}' לא הסתיימה בזמן ובוטלה.`
+      });
+    }
+
+    execFile('powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', `Start-Process "${targetToRun}"`],
+      { timeout: LAUNCH_TIMEOUT_MS, killSignal: 'SIGKILL' },
+      (psErr) =&gt; {
+        if (psErr) {
+          const reason = psErr.killed ? 'היעד לא הגיב בזמן' : psErr.message;
+          return res.status(500).json({ success: false, error: `שגיאה בפתיחת ${appTarget}: ${reason}` });
+        }
+        return reportLaunched();
+      });
+  });
+};
+
+if (targetToRun.includes(':')) {
+  <span class="c">// פרוטוקול: קיים רק אם ה-scheme רשום ב-Registry</span>
+  const scheme = targetToRun.split(':')[0];
+  execFile('reg.exe', ['query', `HKCR\\${scheme}`, '/ve'], { timeout: LAUNCH_TIMEOUT_MS }, (regErr) =&gt; {
+    if (regErr) {
+      return res.status(404).json({
+        success: false,
+        error: `היישום '${appTarget}' אינו מותקן במחשב (הפרוטוקול '${scheme}:' אינו רשום).`
+      });
+    }
+    launchTarget();
+  });
+} else {
+  <span class="c">// קובץ הרצה: קיים רק אם where.exe מוצא אותו ב-PATH</span>
+  execFile('where.exe', [targetToRun], { timeout: LAUNCH_TIMEOUT_MS }, (whereErr) =&gt; {
+    if (whereErr) {
+      return res.status(404).json({
+        success: false,
+        error: `היישום '${appTarget}' לא נמצא במחשב ('${targetToRun}' אינו קיים ב-PATH).`
+      });
+    }
+    launchTarget();
+  });
+}</code></pre>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>בקשה</th><th>לפני</th><th>אחרי</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>app_xyz123</code> (לא קיים)</td><td style="color:var(--danger);">נתקע לנצח</td><td style="color:var(--good);">404 תוך 0.5 שנייה</td></tr>
+          <tr><td><code>spotify</code> (לא מותקן)</td><td style="color:var(--danger);">"הופעל בהצלחה"</td><td style="color:var(--good);">404 — הפרוטוקול לא רשום</td></tr>
+          <tr><td><code>notepad</code></td><td>עובד</td><td style="color:var(--good);">עובד</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="patch">
+    <div class="patch-head">
+      <span class="patch-file">content.js</span>
+      <span style="color:var(--ink-faint); font-size:0.85rem;">התוצאה לא נשלחת חזרה</span>
+    </div>
+    <p class="symptom">
+      התסמין: הפקודה מתבצעת, אבל התוצאה נתקעת בתיבת הקלט ומופיעה השגיאה
+      <code>Something went wrong (1096)</code>. צריך ללחוץ Enter ידנית בכל פעם.
+    </p>
+    <p>
+      השורש: תיבת הקלט של Gemini היא רכיב Angular. הפונקציה <code>injectText</code> כתבה ישירות
+      ל־<code>innerHTML</code>, מה שמעדכן רק את מה שנראה על המסך בזמן שהמודל הפנימי — זה שנשלח בפועל —
+      נשאר ריק. החלף את שורת ה־<code>innerHTML</code> בעריכה אמיתית ברמת הדפדפן:
+    </p>
+<pre><code>const range = document.createRange();
+range.selectNodeContents(target);
+const selection = window.getSelection();
+selection.removeAllRanges();
+selection.addRange(range);
+
+let inserted = false;
+try {
+  inserted = document.execCommand('insertText', false, text);
+} catch (e) {
+  inserted = false;
+}
+
+<span class="c">// גיבוי לשיטה הישנה אם execCommand אינו זמין</span>
+if (!inserted || !(target.innerText || target.textContent || '').trim()) {
+  const lines = text.split('\n');
+  target.innerHTML = lines.map(line =&gt; `&lt;p&gt;${line.trim() === '' ? '&lt;br&gt;' : escapeHtml(line)}&lt;/p&gt;`).join('');
+}</code></pre>
+    <p style="font-size:0.9rem; color:var(--ink-soft);">
+      <code>execCommand</code> מייצר רצף <code>beforeinput</code>/<code>input</code> תקני ש־Angular מאזין לו ומסנכרן ממנו.
+    </p>
+    <div class="note info">
+      <span class="note-label">אחרי כל שינוי בקוד התוסף</span>
+      <p>
+        העתק את הקובץ המעודכן גם ל־<code>GemMCP-extension</code>, לחץ על אייקון הרענון
+        בכרטיס התוסף ב־<code>chrome://extensions</code>, ורענן את הלשונית של Gemini.
+        בלי זה Chrome ימשיך להריץ את הגרסה הישנה.
+      </p>
+    </div>
+  </div>
+
+  <!-- ================= SECURITY ================= -->
+  <div class="section-head" style="margin-top:2.5rem;">
+    <p class="eyebrow">חובה לקרוא</p>
+    <h2>מה שצריך לדעת על האבטחה</h2>
+  </div>
+
+  <div class="note danger" style="margin-bottom:1.25rem;">
+    <span class="note-label">הגדרות ה־env אינן מנעול</span>
+    <p>
+      הפונקציה <code>resolvePermissions</code> ב־<code>server.js</code> מאפשרת ל<strong>גוף הבקשה</strong>
+      לדרוס את ההגדרות בקובץ <code>.env</code>. בדיקה בפועל: בקשה עם
+      <code>permissions: {allowedPath: "C:\"}</code> קיבלה גישה ל־<code>C:\Windows\System32</code>
+      למרות ש־<code>WIN_ALLOWED_PATH</code> הוגבל לשולחן העבודה. אותו דבר תקף להרצת פקודות.
+    </p>
+    <p>
+      המשמעות המעשית: כל תהליך מקומי שמגיע ל־<code>localhost:3000</code> יכול להריץ PowerShell שרירותי
+      כל עוד הגשר פעיל. ה־CORS מאשר גם בקשות ללא <code>origin</code>.
+    </p>
+  </div>
+
+  <p style="margin-bottom:1.25rem;">
+    ההגנה שאמורה הייתה לסגור את זה, <code>BRIDGE_AUTH_TOKEN</code>, אינה שמישה — התוסף עצמו
+    לא שולח את הכותרת <code>x-bridge-token</code>, ולכן הפעלתה פשוט תשבור אותו. השאר אותה מכובה.
+  </p>
+
+  <p style="margin-bottom:0.75rem;"><strong>שלוש הגנות שכן עובדות:</strong></p>
+  <ul style="margin-bottom:2.5rem;">
+    <li>השאר את <strong>Auto-Run Approval כבוי</strong> — זו ההגנה האפקטיבית היחידה מפני פקודה שגויה.</li>
+    <li>הגבל את <code>WIN_ALLOWED_PATH</code> לעץ תיקיות ספציפי, וכבה <code>WIN_PERM_COMMANDS</code>.</li>
+    <li>הרץ את הגשר רק כשצריך, במקום הפעלה אוטומטית בכל הדלקה.</li>
+  </ul>
+
+  <!-- ================= TROUBLESHOOTING ================= -->
+  <div class="section-head">
+    <p class="eyebrow">כשמשהו לא עובד</p>
+    <h2>תקלות נפוצות</h2>
+  </div>
+
+  <div class="table-scroll" style="margin-bottom:2rem;">
+    <table>
+      <thead>
+        <tr><th>מה קורה</th><th>למה ומה עושים</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Chrome מסרב לטעון את התוסף</td>
+          <td>כמעט תמיד נבחרה התיקייה הלא נכונה. <code>manifest.json</code> חייב לשבת ישירות בתיקייה שבחרת. ודא גם שטענת את <code>GemMCP-extension</code> ולא את התיקייה המלאה.</td>
+        </tr>
+        <tr>
+          <td>שום דבר לא קורה אחרי בקשה</td>
+          <td>לפעמים Gemini נתקע במצב ״מייצר״ אחרי שפלט JSON — הכפתור נשאר על <em>Stop response</em>. התוסף ממתין לסיום היצירה, אז לחץ על עצירה וזה ישתחרר מיד.</td>
+        </tr>
+        <tr>
+          <td>תג GemMCP לא מופיע</td>
+          <td>ה־content script נטען רק בטעינת דף. רענן את הלשונית של Gemini.</td>
+        </tr>
+        <tr>
+          <td>״Windows Server: מנותק״</td>
+          <td>הגשר לא רץ. הפעל <code>start-bridge.bat</code> ובדוק את <code>/api/health</code>.</td>
+        </tr>
+        <tr>
+          <td>הגשר רץ אבל פקודות נכשלות</td>
+          <td>במחשב מנוהל ארגונית, מדיניות <code>LocalNetworkAccessAllowedForUrls</code> יכולה לחסום גישה ל־localhost. בדוק ב־<code>chrome://policy</code>.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <footer>
+    <p style="margin:0;">
+      GemMCP הוא קוד פתוח ברישיון MIT מאת SSSHMUEL. שלושת התיקונים שבמדריך הם מקומיים
+      ואינם חלק מהמאגר הרשמי. השימוש באחריות המשתמש.
+    </p>
+  </footer>
+
+</div>
