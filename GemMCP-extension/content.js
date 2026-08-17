@@ -6,7 +6,10 @@
 (function () {
   console.log('%c[GemMCP] 🚀 GemMCP Hub פעיל ומוכן על Gemini!', 'color: #3b82f6; font-weight: bold; font-size: 14px;');
 
-  let isAutoExecute = true;
+  // ברירת מחדל בטוחה: דורש אישור. במקור זה היה true, כך שכל אובדן של המפתח
+  // autoExecute מ-chrome.storage (למשל הסרה והוספה מחדש של התוסף) החזיר בשקט
+  // הרצה אוטומטית ללא אישור.
+  let isAutoExecute = false;
   let activeServices = ['supabase', 'fetch'];
   let connectedServices = ['fetch', 'windows'];
   let processedHashes = new Set();
@@ -50,7 +53,7 @@
     if (typeof data.autoExecute !== 'undefined') {
       isAutoExecute = !!data.autoExecute;
     } else {
-      isAutoExecute = true;
+      isAutoExecute = false;
     }
     const autoToggle = document.getElementById('omni-mcp-auto-toggle');
     if (autoToggle) autoToggle.checked = isAutoExecute;
@@ -87,6 +90,11 @@
     const panel = document.getElementById('omni-mcp-panel');
     if (!panel) return;
     panel.classList.add('open');
+    // הרחבת הכפתור לרוחב הפאנל
+    const toggleBtn = document.getElementById('omni-mcp-toggle-btn');
+    if (toggleBtn) {
+      toggleBtn.classList.add('expanded');
+    }
     // חישוב כיוון הפתיחה לפי המיקום הנוכחי - הכפתור נשאר במקומו
     const widget = document.getElementById('omni-mcp-floating-widget');
     if (widget && typeof widget._omniUpdateDirection === 'function') {
@@ -97,6 +105,11 @@
   function closePanel() {
     const panel = document.getElementById('omni-mcp-panel');
     if (panel) panel.classList.remove('open');
+    // החזרת הכפתור לגודלו המקורי
+    const toggleBtn = document.getElementById('omni-mcp-toggle-btn');
+    if (toggleBtn) {
+      toggleBtn.classList.remove('expanded');
+    }
   }
 
   function setBadgeBusy(busy) {
@@ -195,7 +208,7 @@
       </div>
 
       <button class="omni-mcp-badge-btn" id="omni-mcp-toggle-btn" title="GemMCP">
-        <img src="${chrome.runtime.getURL('icons/icon32.png')}" style="width:18px;height:18px;object-fit:contain;border-radius:3px;" onerror="this.style.display='none'">
+        <img src="${chrome.runtime.getURL('icons/icon32.png')}" style="width:20px;height:20px;object-fit:contain;border-radius:4px;" onerror="this.style.display='none'">
         <span>GemMCP</span>
       </button>
     `;
@@ -226,6 +239,14 @@
     });
 
     closeBtn.addEventListener('click', () => closePanel());
+
+    // Close panel when clicking outside the widget
+    document.addEventListener('click', (e) => {
+      const widget = document.getElementById('omni-mcp-floating-widget');
+      if (widget && !widget.contains(e.target) && panel.classList.contains('open')) {
+        closePanel();
+      }
+    });
 
     autoToggle.addEventListener('change', (e) => {
       isAutoExecute = e.target.checked;
@@ -260,15 +281,21 @@
     }
 
     let launchFailedDueToMissingNode = false;
+    let isShuttingDown = false;
 
     async function checkBridgeStatus() {
       updateBridgeCardVisibility();
-      if (!bridgeIndicator || !bridgeStatusText) return;
-      if (!activeServices || !activeServices.includes('windows')) return;
+      if (isShuttingDown) return false;
+      if (!bridgeIndicator || !bridgeStatusText) return false;
+      if (!activeServices || !activeServices.includes('windows')) return false;
       if (!chrome.runtime || !chrome.runtime.id) return false;
 
       return new Promise((resolve) => {
         chrome.runtime.sendMessage({ action: 'TEST_SERVICE_CONNECTION', service: 'windows' }, (res) => {
+          if (isShuttingDown) {
+            resolve(false);
+            return;
+          }
           if (chrome.runtime.lastError) {
             resolve(false);
             return;
@@ -305,7 +332,7 @@
     if (startBridgeBtn) {
       let isStarting = false;
       startBridgeBtn.addEventListener('click', () => {
-        if (isStarting) return;
+        if (isStarting || isShuttingDown) return;
         isStarting = true;
         launchFailedDueToMissingNode = false;
         if (bridgeOfflineHint) bridgeOfflineHint.style.display = 'none';
@@ -339,11 +366,20 @@
 
     if (stopBridgeBtn) {
       stopBridgeBtn.addEventListener('click', () => {
+        if (isShuttingDown) return;
+        isShuttingDown = true;
         bridgeStatusText.textContent = 'מכבה... ⏳';
         bridgeStatusText.style.color = '#64748b';
         chrome.runtime.sendMessage({ action: 'SHUTDOWN_BRIDGE_SERVER' }, () => {
+          isShuttingDown = false;
+          bridgeIndicator.style.background = '#94a3b8';
+          bridgeIndicator.style.boxShadow = 'none';
+          bridgeStatusText.textContent = 'כבוי';
+          bridgeStatusText.style.color = '#64748b';
+          if (startBridgeBtn) startBridgeBtn.style.display = 'flex';
+          if (stopBridgeBtn) stopBridgeBtn.style.display = 'none';
+          if (bridgeOfflineHint) bridgeOfflineHint.style.display = 'none';
           addLog('🛑 שרת Windows Bridge כובה.');
-          setTimeout(checkBridgeStatus, 600);
         });
       });
     }
@@ -663,6 +699,59 @@
 
   let activeSendInterval = null;
 
+  // כתיבת טקסט לתיבת הקלט של ג'מיני. חייבת לעבור דרך execCommand: התיבה היא
+  // רכיב Angular, וכתיבה ישירה ל-innerHTML מעדכנת רק את ה-DOM הגלוי בעוד המודל
+  // הפנימי - זה שנשלח בפועל - נשאר לא מסונכרן. אז השליחה נכשלת או "נבלעת".
+  // execCommand מייצר רצף beforeinput/input תקני ש-Angular מאזין לו ומסנכרן ממנו.
+  function setComposerText(target, text) {
+    if (!target) return false;
+
+    target.focus();
+
+    const range = document.createRange();
+    range.selectNodeContents(target);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    let inserted = false;
+    try {
+      inserted = document.execCommand('insertText', false, text);
+    } catch (e) {
+      inserted = false;
+    }
+
+    // גיבוי לשיטה הישנה אם execCommand אינו זמין או לא הותיר טקסט
+    if (!inserted || !(target.innerText || target.textContent || '').trim()) {
+      const lines = text.split('\n');
+      target.innerHTML = lines.map(line => `<p>${line.trim() === '' ? '<br>' : escapeHtml(line)}</p>`).join('');
+    }
+
+    target.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: text }));
+    target.dispatchEvent(new Event('input', { bubbles: true }));
+    target.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  }
+
+  // איתור ולחיצה על כפתור השליחה האמיתי של ג'מיני (לא כפתור העצירה)
+  function clickGeminiSendButton() {
+    const candidates = Array.from(document.querySelectorAll('button')).filter((btn) => {
+      if (btn.disabled || btn.getAttribute('aria-disabled') === 'true') return false;
+      const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+      const cls = (btn.className || '').toLowerCase();
+      if (label.includes('stop') || label.includes('עצור') || label.includes('הפסק') || cls.includes('stop')) return false;
+      return label.includes('send') || label.includes('שלח') || label.includes('submit') ||
+             cls.includes('send-button') || !!btn.closest('.send-button-container');
+    });
+    for (const btn of candidates) {
+      if (btn.offsetParent !== null) {
+        btn.click();
+        return true;
+      }
+    }
+    return false;
+  }
+
   function setInputValueAndSend(element, text) {
     if (!element) return;
     let target = element;
@@ -687,34 +776,7 @@
       }
       if (!target) return;
 
-      target.focus();
-
-      // תיבת הקלט של ג'מיני מנוהלת ע"י Angular. כתיבה ישירה ל-innerHTML מעדכנת
-      // רק את מה שנראה על המסך בעוד המודל הפנימי נשאר ריק, ואז לחיצת השליחה
-      // נכשלת עם שגיאה כללית ("Something went wrong"). execCommand מייצר עריכה
-      // אמיתית ברמת הדפדפן (beforeinput/input), ולכן Angular קולט ומסנכרן.
-      const range = document.createRange();
-      range.selectNodeContents(target);
-      const selection = window.getSelection();
-      selection.removeAllRanges();
-      selection.addRange(range);
-
-      let inserted = false;
-      try {
-        inserted = document.execCommand('insertText', false, text);
-      } catch (e) {
-        inserted = false;
-      }
-
-      // גיבוי לשיטה הישנה אם execCommand אינו זמין או לא הותיר טקסט
-      if (!inserted || !(target.innerText || target.textContent || '').trim()) {
-        const lines = text.split('\n');
-        target.innerHTML = lines.map(line => `<p>${line.trim() === '' ? '<br>' : escapeHtml(line)}</p>`).join('');
-      }
-
-      target.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: text }));
-      target.dispatchEvent(new Event('input', { bubbles: true }));
-      target.dispatchEvent(new Event('change', { bubbles: true }));
+      setComposerText(target, text);
     }
 
     // הזרקה ראשונית של התשובה לתיבת הטקסט
@@ -723,17 +785,30 @@
     let attempts = 0;
     const maxAttempts = 90; // נבדוק עד כדקה וחצי (90 שניות)
     let hasLoggedWaiting = false;
+    let generatingWaits = 0;
+    const maxGeneratingWaits = 15; // עד 15 שניות המתנה לסיום יצירה, ואז שולחים בכל זאת
+    let hasLoggedGiveUp = false;
 
     function attemptSend() {
       attempts++;
 
-      // 1. בדיקה אם ג'מיני עדיין מייצר/מזרים את התשובה הנוכחית
+      // 1. בדיקה אם ג'מיני עדיין מייצר/מזרים את התשובה הנוכחית.
+      //    ההמתנה חסומה בזמן: ה-return כאן קודם לבדיקת maxAttempts שבהמשך, ולכן
+      //    בלי תקרה נפרדת לולאה זו נמשכת לנצח כשג'מיני נתקע במצב "מייצר".
       if (isGeminiGenerating()) {
         if (!hasLoggedWaiting) {
           addLog('ממתין לסיום התשובה של Gemini כדי לשלוח תוצאה...');
           hasLoggedWaiting = true;
         }
-        return; // ממשיכים להמתין לפעימה הבאה
+        generatingWaits++;
+        if (generatingWaits < maxGeneratingWaits) {
+          return; // ממשיכים להמתין לפעימה הבאה
+        }
+        // חלף זמן ההמתנה - כנראה אינדיקטור תקוע ולא יצירה אמיתית. שולחים בכל זאת.
+        if (!hasLoggedGiveUp) {
+          addLog(`ג'מיני עדיין מסומן כמייצר לאחר ${maxGeneratingWaits} שניות – שולח בכל זאת`);
+          hasLoggedGiveUp = true;
+        }
       }
 
       // 2. ג'מיני סיים לייצר - מוודאים שהטקסט עדיין נמצא בתיבת הקלט
@@ -849,6 +924,18 @@
     });
   }
 
+  // אלמנט נחשב לעדות ליצירה רק אם הוא באמת נראה על המסך. בדף של ג'מיני יש
+  // mat-progress-bar ו-mat-spinner מוסתרים שקיימים תמיד, וללא הבדיקה הזו
+  // isGeminiGenerating מחזירה true לנצח והסריקה נחסמת לחלוטין.
+  function isElementVisible(el) {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+    if (el.offsetParent === null && style.position !== 'fixed') return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+
   function isGeminiGenerating() {
     // בודק אם יש כפתור Stop פעיל או אינדיקטור טעינה המעיד על כך שג'מיני עדיין מייצר תגובה
     const stopSelectors = [
@@ -864,9 +951,10 @@
     ];
     
     for (const sel of stopSelectors) {
-      const el = document.querySelector(sel);
-      if (el && !el.disabled && el.getAttribute('aria-disabled') !== 'true') {
-        return true;
+      for (const el of document.querySelectorAll(sel)) {
+        if (!el.disabled && el.getAttribute('aria-disabled') !== 'true' && isElementVisible(el)) {
+          return true;
+        }
       }
     }
 
@@ -882,7 +970,9 @@
     ];
     
     for (const sel of loadingSelectors) {
-      if (document.querySelector(sel)) return true;
+      for (const el of document.querySelectorAll(sel)) {
+        if (isElementVisible(el)) return true;
+      }
     }
 
     return false;
@@ -914,15 +1004,30 @@
     return false;
   }
 
+  // כמה זמן בלוק JSON צריך להישאר ללא שינוי לפני שמותר לפעול עליו בזמן יצירה
+  const JSON_STABLE_MS = 700;
+  const blockStability = new WeakMap();
+
+  // בלוק נחשב יציב אם הטקסט שלו זהה למה שנראה בפעם הקודמת, במשך JSON_STABLE_MS.
+  // JSON שעדיין מוזרם משתנה בכל בדיקה ולכן לא יגיע ליציבות, גם אם במקרה הוא
+  // מנתח בהצלחה באמצע הדרך.
+  function isBlockStable(el, text) {
+    const prev = blockStability.get(el);
+    const now = Date.now();
+    if (!prev || prev.text !== text) {
+      blockStability.set(el, { text, since: now });
+      return false;
+    }
+    return (now - prev.since) >= JSON_STABLE_MS;
+  }
+
   function scanForToolCalls(forceRescan = false) {
     if (isExecuting) return false;
 
-    // אם ג'מיני עדיין מקליד באופן פעיל, נמתין עוד רגע (אלא אם זו לחיצה ידנית)
-    if (!forceRescan && isGeminiGenerating()) {
-      clearTimeout(scanDebounceTimer);
-      scanDebounceTimer = setTimeout(scanForToolCalls, 500);
-      return false;
-    }
+    // בעבר הסריקה נדחתה כאן כל עוד isGeminiGenerating() החזירה true - המתנה
+    // ללא גבול. כשג'מיני נתקע במצב "מייצר" אף פקודה לא זוהתה לעולם. כעת סורקים
+    // גם בזמן יצירה, וההגנה מפני JSON חלקי היא בדיקת היציבות שבתוך הלופ.
+    const generating = !forceRescan && isGeminiGenerating();
 
     if (forceRescan) {
       isInitialGracePeriod = false;
@@ -943,6 +1048,14 @@
       if (text.includes('{') && (text.includes('"action"') || text.includes('"service"') || text.includes('"app_name"') || text.includes('"command"') || text.includes('"path"') || text.includes('execute_sql') || text.includes('"query"'))) {
         const toolCall = parseToolCall(text);
         if (toolCall) {
+          // בזמן יצירה פועלים רק אחרי שהבלוק הפסיק להשתנות. לא מסמנים כמטופל,
+          // אחרת הבלוק ייפסל לתמיד ולא ייבדק שוב כשיתייצב.
+          if (generating && !isBlockStable(el, text)) {
+            clearTimeout(scanDebounceTimer);
+            scanDebounceTimer = setTimeout(() => scanForToolCalls(), 300);
+            continue;
+          }
+
           el.dataset.omniProcessed = 'true';
           const parentTurn = el.closest('[data-test-id="conversation-turn"]') || el.closest('model-response') || el.closest('message-content');
           if (parentTurn) parentTurn.dataset.omniProcessed = 'true';
@@ -1255,24 +1368,41 @@
     setInputValueAndSend(inputField, formattedResponse);
   }
 
+  // ההעשרה מחליפה את תוכן הקומפוזר באמצע טיפול באירוע השליחה. בעבר האירוע
+  // המקורי המשיך לג'מיני מיד לאחר מכן, לפני שהמודל של Angular הספיק להתעדכן,
+  // וג'מיני שלח תוכן לא מסונכרן - מה שנראה כמו Enter ש"נבלע". כעת עוצרים את
+  // האירוע המקורי, מעשירים, ומפעילים את השליחה מחדש אחרי שהמודל התעדכן.
+  const ENRICH_SEND_DELAY_MS = 150;
+
+  function suppressAndResend(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+    setTimeout(() => {
+      if (!clickGeminiSendButton()) {
+        addLog('ההעשרה בוצעה אך לא נמצא כפתור שליחה – שלח ידנית');
+      }
+    }, ENRICH_SEND_DELAY_MS);
+  }
+
   function attachUserIntentInterceptor() {
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        const inputField = findGeminiInputField();
-        if (inputField && (document.activeElement === inputField || inputField.contains(document.activeElement))) {
-          enrichInputIfNeeded(inputField);
-        }
-      }
+      if (e.key !== 'Enter' || e.shiftKey) return;
+      const inputField = findGeminiInputField();
+      if (!inputField) return;
+      if (!(document.activeElement === inputField || inputField.contains(document.activeElement))) return;
+
+      // אם לא היה מה להעשיר - לא נוגעים באירוע, ג'מיני שולח כרגיל
+      if (enrichInputIfNeeded(inputField)) suppressAndResend(e);
     }, true);
 
     document.addEventListener('click', (e) => {
       const sendBtn = e.target.closest('button.send-button, button[aria-label*="שלח"], button[aria-label*="Send"], .send-button-container button');
-      if (sendBtn) {
-        const inputField = findGeminiInputField();
-        if (inputField) {
-          enrichInputIfNeeded(inputField);
-        }
-      }
+      if (!sendBtn) return;
+      const inputField = findGeminiInputField();
+      if (!inputField) return;
+
+      if (enrichInputIfNeeded(inputField)) suppressAndResend(e);
     }, true);
   }
 
@@ -1283,9 +1413,39 @@
     }
 
     let text = (target.innerText || target.textContent || '').trim();
-    if (!text || text.includes('[GemMCP') || text.includes('[OmniMCP') || text.includes('[MCP_RESPONSE') || text.includes('[הנחיה ל-Gemini:')) {
-      return;
+    // 'Format response strictly' / 'Format output strictly' הם הטקסט שההעשרה עצמה
+    // מוסיפה. בלי לבדוק אותם ההעשרה נערמת שוב בכל ניסיון שליחה חוזר.
+    if (!text || text.includes('[GemMCP') || text.includes('[OmniMCP') || text.includes('[MCP_RESPONSE') ||
+        text.includes('[SCHEMA') || text.includes('[הנחיה') ||
+        text.includes('Format response strictly') || text.includes('Format output strictly')) {
+      return false;
     }
+
+    const WINDOWS_SCHEMA = `Format response strictly as a JSON object for Windows OS:
+- open_app: {"service": "windows", "action": "open_app", "app_name": "<name>"}
+- list_directory: {"service": "windows", "action": "list_directory", "path": "<path e.g. ~/Downloads, ~/Desktop, C:\\...>"}
+- read_file: {"service": "windows", "action": "read_file", "path": "<path>"}
+- write_file: {"service": "windows", "action": "write_file", "path": "<path>", "content": "<text>"}
+- run_command: {"service": "windows", "action": "run_command", "command": "<powershell_command>"}
+- clipboard_read: {"service": "windows", "action": "clipboard_read"}
+- clipboard_write: {"service": "windows", "action": "clipboard_write", "text": "<text>"}`;
+
+    const SUPABASE_SCHEMA = `Format response strictly as a JSON object for Supabase:
+- execute_sql: {"service": "supabase", "action": "execute_sql", "query": "<SQL query based on request>"}`;
+
+    const NOTION_SCHEMA = `Format response strictly as a JSON object for Notion:
+- search: {"service": "notion", "action": "search", "query": "<search_term or empty>"}
+- get_page: {"service": "notion", "action": "get_page", "page_id": "<page_id>"}
+- create_page: {"service": "notion", "action": "create_page", "title": "<title>", "content": "<content>"}`;
+
+    const GITHUB_SCHEMA = `Format response strictly as a JSON object for GitHub:
+- list_repos: {"service": "github", "action": "list_repos"}
+- get_file: {"service": "github", "action": "get_file", "repo": "<owner/repo>", "path": "<path>"}
+- create_repo: {"service": "github", "action": "create_repo", "name": "<name>", "private": false}
+- create_issue: {"service": "github", "action": "create_issue", "repo": "<repo>", "title": "<title>", "body": "<body>"}`;
+
+    const FETCH_SCHEMA = `Format response strictly as a JSON object for Web Fetch:
+- get_url: {"service": "fetch", "action": "get_url", "url": "<url>"}`;
 
     // 1. בדיקה אם יש תיוג @כלי (לדוגמה @Supabase, @Notion, @Windows, @GitHub, @Fetch או @Custom)
     const availableTools = getAvailableMentionTools();
@@ -1298,27 +1458,23 @@
       const atId = `@${tool.id}`;
 
       if (text.includes(atTag) || text.includes(atName) || text.includes(atId)) {
-        let promptText = '';
-        if (typeof generateSingleToolPrompt === 'function') {
-          promptText = generateSingleToolPrompt(tool.id, tool.customConfig, customToolPrompts);
-        } else {
-          promptText = `[הנחיה ל-Gemini: יש לך גישה לחיבור ${tool.name} דרך תוסף GemMCP. פלוט בלוק JSON מתאים לביצוע הבקשה.]\n\nבקשת המשתמש: `;
-        }
-
-        // הסרת התגית מהטקסט של המשתמש והרכבת הפרומפט המלא
+        // הסרת התגית מהטקסט של המשתמש
         let userCleanText = text
           .replace(atTag, '')
           .replace(atName, '')
           .replace(atId, '')
           .trim();
 
-        const fullText = `${promptText}${userCleanText}`;
-        const lines = fullText.split('\n');
-        target.innerHTML = lines.map(line => `<p>${line.trim() === '' ? '<br>' : escapeHtml(line)}</p>`).join('');
-        target.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, data: fullText }));
-        target.dispatchEvent(new Event('input', { bubbles: true }));
+        let fullText = '';
+        if (typeof generateSingleToolPrompt === 'function') {
+          fullText = generateSingleToolPrompt(tool.id, tool.customConfig, customToolPrompts, userCleanText);
+        } else {
+          fullText = `${userCleanText}\n\nFormat output strictly as JSON object with service "${tool.id}".`;
+        }
+
+        setComposerText(target, fullText);
         addLog(`הוזרק פרומפט ממוקד עבור כלי [${tool.name}] בעת השליחה`);
-        return;
+        return true;
       }
     }
 
@@ -1327,36 +1483,39 @@
 
     // זיהוי כוונות Notion
     if (activeServices.includes('notion') && (lower.includes('נושן') || lower.includes('notion') || lower.includes('פתק') || lower.includes('רשימ') || lower.includes('משימ') || lower.includes('דפים'))) {
-      directive = `\n(הנחיה ל-Gemini: חיבור Notion פעיל ב-GemMCP! הוצא אך ורק בלוק JSON עם action: "search" לחיפוש/שליפת הפתקים מ-Notion ללא טקסט מקדים וללא שימוש ב-Google Keep)`;
+      directive = `\n\n${NOTION_SCHEMA}`;
     }
     // זיהוי כוונות Supabase
-    else if (activeServices.includes('supabase') && (lower.includes('סופה') || lower.includes('supabase') || lower.includes('טבלא') || lower.includes('מסד נתונים') || lower.includes('sql') || lower.includes('בסיס נתונים'))) {
-      directive = `\n(הנחיה ל-Gemini: חיבור Supabase פעיל ב-GemMCP! הוצא אך ורק בלוק JSON עם שאילתת SQL ב-execute_sql לשליפת המידע המבוקש ללא טקסט מקדים)`;
+    else if (activeServices.includes('supabase') && (lower.includes('סופה') || lower.includes('supabase') || lower.includes('טבלא') || lower.includes('מסד נתונים') || lower.includes('sql') || lower.includes('בסיס נתונים') || lower.includes('שאילת'))) {
+      directive = `\n\n${SUPABASE_SCHEMA}`;
     }
-    // זיהוי כוונות Windows (פתיחת תוכנות, אפליקציות, קבצים, לוח, פקודות)
+    // זיהוי כוונות Windows
     else if (activeServices.includes('windows') && (
       lower.includes('פתח') || lower.includes('תפתח') || lower.includes('הפעל') || lower.includes('סגור') ||
-      lower.includes('קלוד') || lower.includes('claude') || lower.includes('chatgpt') || lower.includes('גפט') ||
-      lower.includes('vscode') || lower.includes('קוד') || lower.includes('מחשבון') || lower.includes('פנקס') ||
-      lower.includes('ספוטיפיי') || lower.includes('spotify') || lower.includes('ווטסאפ') || lower.includes('טלגרם') ||
-      lower.includes('מצלמה') || lower.includes('camera') || lower.includes('צייר') || lower.includes('וורד') || lower.includes('אקסל') ||
-      lower.includes('קובץ במחשב') || lower.includes('powershell') || lower.includes('ווינדוס') || lower.includes('windows') ||
-      lower.includes('כונן') || lower.includes('לוח') || lower.includes('clipboard')
+      lower.includes('הורדות') || lower.includes('שולחן עבודה') || lower.includes('מסמכים') || lower.includes('תיקיי') ||
+      lower.includes('קובץ') || lower.includes('סרוק') || lower.includes('קרא') || lower.includes('כתוב') || lower.includes('שמור') ||
+      lower.includes('powershell') || lower.includes('cmd') || lower.includes('ווינדוס') || lower.includes('windows') ||
+      lower.includes('מחשב') || lower.includes('לוח') || lower.includes('clipboard') || lower.includes('תהליכ') ||
+      lower.includes('זיכרון') || lower.includes('מחשבון') || lower.includes('וורד') || lower.includes('אקסל') ||
+      lower.includes('vscode') || lower.includes('קלוד') || lower.includes('ספוטיפיי') || lower.includes('כרום')
     )) {
-      directive = `\n(הנחיה ל-Gemini: חיבור Windows פעיל ב-GemMCP! הוצא אך ורק בלוק JSON להרצת הפעולה ב-Windows ללא טקסט מקדים)`;
+      directive = `\n\n${WINDOWS_SCHEMA}`;
     }
     // זיהוי כוונות GitHub
-    else if (activeServices.includes('github') && (lower.includes('גיטהאב') || lower.includes('github') || lower.includes('מאגר') || lower.includes('ריפו'))) {
-      directive = `\n(הנחיה ל-Gemini: חיבור GitHub פעיל ב-GemMCP! הוצא אך ורק בלוק JSON לפעולת GitHub ללא טקסט מקדים)`;
+    else if (activeServices.includes('github') && (lower.includes('גיטהאב') || lower.includes('github') || lower.includes('מאגר') || lower.includes('ריפו') || lower.includes('issue'))) {
+      directive = `\n\n${GITHUB_SCHEMA}`;
+    }
+    // זיהוי כוונות Fetch (קישורים ואתרים)
+    else if (activeServices.includes('fetch') && (lower.includes('http://') || lower.includes('https://') || lower.includes('אתר') || lower.includes('סרוק קישור') || lower.includes('קרא אתר'))) {
+      directive = `\n\n${FETCH_SCHEMA}`;
     }
 
     if (directive) {
-      const fullText = text + directive;
-      const lines = fullText.split('\n');
-      target.innerHTML = lines.map(line => `<p>${line.trim() === '' ? '<br>' : escapeHtml(line)}</p>`).join('');
-      target.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, data: fullText }));
-      target.dispatchEvent(new Event('input', { bubbles: true }));
+      setComposerText(target, text.trim() + directive);
+      return true;
     }
+
+    return false;
   }
 
   // =========================================================================
@@ -1385,12 +1544,21 @@
 
   function getAvailableMentionTools() {
     const list = [];
+    const ICONS = {
+      supabase: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M21.362 9.354H12V.304a.796.796 0 0 0-1.396-.534L1.879 11.238a1.59 1.59 0 0 0 1.097 2.656h9.362v9.05a.796.796 0 0 0 1.396.534l8.725-11.468a1.59 1.59 0 0 0-1.097-2.656z" fill="#3ECF8E"/></svg>`,
+      notion: `<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M4.459 4.208c.746.606 1.026.56 2.428.466l13.215-.793c.28 0 .047-.28-.046-.373L18.423 2.15c-.466-.467-1.12-.934-2.334-.84L2.872 2.384c-.373.047-.466.327-.326.56l1.913 1.264zm.933 3.36v13.533c0 .84.42 1.12 1.306 1.073l14.15-.84c.886-.046 1.12-.513 1.12-1.353V6.775c0-.607-.233-.887-.793-.84l-14.99.886c-.56.047-.793.327-.793.747zm13.12 1.493c.093.42 0 .84-.42.887l-.746.14v8.307c0 .653-.28 1.026-.98 1.073-.653.047-1.213-.14-1.633-.7l-4.713-7.467v7.047l1.4.28c.094.42-.186.793-.606.84l-3.92.233c-.093-.42.093-.84.513-.886l.933-.187V9.754l-1.306-.14c-.094-.42.186-.793.606-.84l3.92-.234 4.853 7.514V9.38l-1.12-.233c-.094-.42.186-.793.606-.84l3.08-.187c-.046.327 0 .653.046.934z"/></svg>`,
+      windows: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect x="1.5" y="1.5" width="9.5" height="9.5" rx="0.5" fill="#0078D4"/><rect x="13" y="1.5" width="9.5" height="9.5" rx="0.5" fill="#0078D4"/><rect x="1.5" y="13" width="9.5" height="9.5" rx="0.5" fill="#0078D4"/><rect x="13" y="13" width="9.5" height="9.5" rx="0.5" fill="#0078D4"/></svg>`,
+      github: `<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/></svg>`,
+      fetch: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0ea5e9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`,
+      custom: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6m0 8v6M2 12h6m8 0h6M4.93 4.93l4.24 4.24m5.66 5.66l4.24 4.24M4.93 19.07l4.24-4.24m5.66-5.66l4.24-4.24"/></svg>`
+    };
+
     const meta = {
-      supabase: { id: 'supabase', tag: 'Supabase', name: 'Supabase Database', desc: 'שאילתות SQL ונתונים', icon: '⚡' },
-      notion: { id: 'notion', tag: 'Notion', name: 'Notion Workspace', desc: 'חיפוש, פתקים ומשימות', icon: '📝' },
-      windows: { id: 'windows', tag: 'Windows', name: 'Windows OS Tools', desc: 'שליטה במחשב, אפליקציות וקבצים', icon: '🪟' },
-      github: { id: 'github', tag: 'GitHub', name: 'GitHub Integration', desc: 'מאגרים, קוד מקור ו-Issues', icon: '🐙' },
-      fetch: { id: 'fetch', tag: 'Fetch', name: 'Web Fetch & Scraper', desc: 'סריקת אתרים ציבוריים ואישיים מחוברים', icon: '🌐' }
+      supabase: { id: 'supabase', tag: 'Supabase', name: 'Supabase Database', desc: 'שאילתות SQL ונתונים', icon: ICONS.supabase },
+      notion: { id: 'notion', tag: 'Notion', name: 'Notion Workspace', desc: 'חיפוש, פתקים ומשימות', icon: ICONS.notion },
+      windows: { id: 'windows', tag: 'Windows', name: 'Windows OS Tools', desc: 'שליטה במחשב, אפליקציות וקבצים', icon: ICONS.windows },
+      github: { id: 'github', tag: 'GitHub', name: 'GitHub Integration', desc: 'מאגרים, קוד מקור ו-Issues', icon: ICONS.github },
+      fetch: { id: 'fetch', tag: 'Fetch', name: 'Web Fetch & Scraper', desc: 'סריקת אתרים ציבוריים ואישיים מחוברים', icon: ICONS.fetch }
     };
 
     // הוספת שירותים פעילים ומחוברים
@@ -1410,7 +1578,7 @@
           tag: tagName,
           name: cs.name ? cs.name : `Custom MCP #${idx + 1}`,
           desc: cs.customPrompt ? cs.customPrompt.slice(0, 45) + '...' : 'שרת MCP מותאם אישית',
-          icon: '🔌',
+          icon: ICONS.custom,
           isCustom: true,
           customConfig: cs
         });
@@ -1549,11 +1717,8 @@
 
     hideMentionPopup();
 
-    // הזנה לתוך תיבת הטקסט
-    const lines = currentText.split('\n');
-    target.innerHTML = lines.map(line => `<p>${line.trim() === '' ? '<br>' : escapeHtml(line)}</p>`).join('');
-    target.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: currentText }));
-    target.dispatchEvent(new Event('input', { bubbles: true }));
+    // הזנה לתוך תיבת הטקסט דרך אותו מסלול מסונכרן
+    setComposerText(target, currentText);
 
     // החזרת פוקוס והצבת הסמן בסוף
     target.focus();

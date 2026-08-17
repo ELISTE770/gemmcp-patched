@@ -114,6 +114,19 @@ document.addEventListener('DOMContentLoaded', () => {
     fetch: document.getElementById('prompt-fetch')
   };
 
+  // Track "saved" values for prompt dirty detection
+  const promptSavedValues = {};
+
+  // Helper: show/hide the save button for a built-in prompt service
+  function updatePromptSaveBtn(srv) {
+    const saveBtn = document.querySelector(`.btn-save-prompt[data-service="${srv}"]`);
+    if (!saveBtn) return;
+    const el = promptTextareas[srv];
+    if (!el) return;
+    const isDirty = el.value !== (promptSavedValues[srv] ?? el.value);
+    saveBtn.style.display = isDirty ? 'inline-block' : 'none';
+  }
+
   // Prompt Toggle Buttons (פתיחה/סגירה של עריכת פרומפט)
   const promptToggleBtns = document.querySelectorAll('.prompt-toggle-btn');
   promptToggleBtns.forEach(btn => {
@@ -128,6 +141,21 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
+  // Prompt Save Buttons — appear only when textarea is dirty
+  const savePromptBtns = document.querySelectorAll('.btn-save-prompt');
+  savePromptBtns.forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const srv = btn.dataset.service;
+      if (srv && promptTextareas[srv]) {
+        promptSavedValues[srv] = promptTextareas[srv].value;
+        autoSaveAllSettings();
+        btn.style.display = 'none';
+        showStatus(typeof t === 'function' ? t('saveBtnSuccess', currentLang) : 'נשמר! ✅', 'success');
+      }
+    });
+  });
+
   // Reset Prompt Buttons (איפוס לברירת מחדל)
   const resetPromptBtns = document.querySelectorAll('.btn-reset-prompt');
   resetPromptBtns.forEach(btn => {
@@ -137,7 +165,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (srv && promptTextareas[srv]) {
         const defPrompt = typeof getDefaultPrompt === 'function' ? getDefaultPrompt(srv, currentLang) : '';
         promptTextareas[srv].value = defPrompt;
-        debouncedAutoSave();
+        promptSavedValues[srv] = defPrompt;
+        updatePromptSaveBtn(srv);
+        autoSaveAllSettings();
         showStatus(`הנחיות [${srv}] אופסו לברירת המחדל ↺`, 'success');
       }
     });
@@ -177,6 +207,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const winPermApp = document.getElementById('win-perm-app');
   const winPermClipboard = document.getElementById('win-perm-clipboard');
   const testWindowsBtn = document.getElementById('testWindowsBtn');
+  const stopWindowsBridgeBtn = document.getElementById('stopWindowsBridgeBtn');
 
   // OAuth & Disconnect Buttons
   const oauthSupabaseBtn = document.getElementById('oauthSupabaseBtn');
@@ -246,6 +277,14 @@ document.addEventListener('DOMContentLoaded', () => {
       item.className = `custom-server-item ${server.enabled === false ? 'disabled' : ''}`;
       item.dataset.id = server.id;
 
+      // Snapshot of saved values for dirty detection
+      const savedSnapshot = {
+        name: server.name || '',
+        url: server.url || '',
+        authHeader: server.authHeader || '',
+        customPrompt: server.customPrompt || ''
+      };
+
       item.innerHTML = `
         <div class="custom-server-header-row">
           <div class="custom-server-title-meta">
@@ -288,7 +327,10 @@ document.addEventListener('DOMContentLoaded', () => {
         </div>
 
         <div class="custom-server-actions">
-          <button type="button" class="custom-server-test-btn">⚡ בדוק חיבור לשרת</button>
+          <div class="custom-server-btn-group">
+            <button type="button" class="custom-server-test-btn">⚡ בדוק חיבור לשרת</button>
+            <button type="button" class="custom-server-save-btn" style="display:none;">💾 שמור שינויים</button>
+          </div>
           <div class="inline-test-result custom-srv-result"></div>
         </div>
       `;
@@ -301,8 +343,19 @@ document.addEventListener('DOMContentLoaded', () => {
       const promptInput = item.querySelector('.custom-srv-prompt');
       const deleteBtn = item.querySelector('.btn-delete-server');
       const testBtn = item.querySelector('.custom-server-test-btn');
+      const customSaveBtn = item.querySelector('.custom-server-save-btn');
       const resultEl = item.querySelector('.custom-srv-result');
       const displayName = item.querySelector('.custom-server-display-name');
+
+      // Helper: check if any field is dirty vs. saved snapshot
+      function checkCustomDirty() {
+        const dirty =
+          nameInput.value.trim() !== savedSnapshot.name ||
+          urlInput.value.trim() !== savedSnapshot.url ||
+          authInput.value.trim() !== savedSnapshot.authHeader ||
+          promptInput.value.trim() !== savedSnapshot.customPrompt;
+        if (customSaveBtn) customSaveBtn.style.display = dirty ? 'inline-block' : 'none';
+      }
 
       toggle.addEventListener('change', () => {
         server.enabled = toggle.checked;
@@ -313,23 +366,41 @@ document.addEventListener('DOMContentLoaded', () => {
       nameInput.addEventListener('input', () => {
         server.name = nameInput.value.trim();
         displayName.textContent = server.name || `שרת MCP מותאם #${index + 1}`;
+        checkCustomDirty();
         debouncedAutoSave();
       });
 
       urlInput.addEventListener('input', () => {
         server.url = urlInput.value.trim();
+        checkCustomDirty();
         debouncedAutoSave();
       });
 
       authInput.addEventListener('input', () => {
         server.authHeader = authInput.value.trim();
+        checkCustomDirty();
         debouncedAutoSave();
       });
 
       promptInput.addEventListener('input', () => {
         server.customPrompt = promptInput.value.trim();
+        checkCustomDirty();
         debouncedAutoSave();
       });
+
+      // Save button — explicit manual save
+      if (customSaveBtn) {
+        customSaveBtn.addEventListener('click', () => {
+          // Update snapshot to current values
+          savedSnapshot.name = nameInput.value.trim();
+          savedSnapshot.url = urlInput.value.trim();
+          savedSnapshot.authHeader = authInput.value.trim();
+          savedSnapshot.customPrompt = promptInput.value.trim();
+          autoSaveAllSettings();
+          customSaveBtn.style.display = 'none';
+          showStatus('שרת MCP נשמר בהצלחה! 💾', 'success');
+        });
+      }
 
       deleteBtn.addEventListener('click', () => {
         if (confirm(`האם אתה בטוח שברצונך למחוק את השרת "${server.name || `שרת #${index + 1}`}"?`)) {
@@ -526,10 +597,13 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // שמירה אוטומטית בעת עריכת פרומפטים של כלים
-  Object.values(promptTextareas).forEach(textarea => {
+  // שמירה אוטומטית ברקע + הצגת כפתור שמור בעת עריכת פרומפטים
+  Object.entries(promptTextareas).forEach(([srv, textarea]) => {
     if (textarea) {
-      textarea.addEventListener('input', debouncedAutoSave);
+      textarea.addEventListener('input', () => {
+        updatePromptSaveBtn(srv);
+        debouncedAutoSave();
+      });
     }
   });
 
@@ -575,6 +649,9 @@ document.addEventListener('DOMContentLoaded', () => {
           } else {
             el.value = typeof getDefaultPrompt === 'function' ? getDefaultPrompt(srv) : '';
           }
+          // Sync saved baseline so dirty detection starts fresh
+          promptSavedValues[srv] = el.value;
+          updatePromptSaveBtn(srv);
         }
       }
 
@@ -584,10 +661,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
   loadAllStoredSettings();
 
-  // --- שמירת הגדרות ידניות בלחיצת כפתור ---
+  // --- כפתור שמור גיבוי גלובלי (נשאר ב-DOM לגיבוי, מוסתר כברירת מחדל) ---
   if (saveBtn) {
     saveBtn.addEventListener('click', () => {
       autoSaveAllSettings();
+      // Update all prompt snapshots
+      Object.entries(promptTextareas).forEach(([srv, el]) => {
+        if (el) promptSavedValues[srv] = el.value;
+        updatePromptSaveBtn(srv);
+      });
       showStatus('כל ההגדרות והשרתים נשמרו בהצלחה! 🌟', 'success');
     });
   }
@@ -665,6 +747,7 @@ document.addEventListener('DOMContentLoaded', () => {
     chrome.runtime.sendMessage({ action: 'TEST_SERVICE_CONNECTION', service: 'windows' }, (res) => {
       const offlineBar = document.getElementById('win-bridge-offline-bar');
       const missingNodeBox = document.getElementById('win-bridge-node-missing-box');
+      const stopBridgeBtn = document.getElementById('stopWindowsBridgeBtn');
       
       if (res && res.success) {
         popupLaunchFailed = false;
@@ -674,6 +757,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (offlineBar) offlineBar.style.display = 'none';
         if (missingNodeBox) missingNodeBox.style.display = 'none';
+        if (stopBridgeBtn) stopBridgeBtn.style.display = 'inline-flex';
         if (callback) callback(true);
       } else {
         if (pillWindows) {
@@ -687,6 +771,7 @@ document.addEventListener('DOMContentLoaded', () => {
           if (offlineBar) offlineBar.style.display = 'flex';
           if (missingNodeBox) missingNodeBox.style.display = 'none';
         }
+        if (stopBridgeBtn) stopBridgeBtn.style.display = 'none';
         if (callback) callback(false);
       }
     });
@@ -828,6 +913,24 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // כיבוי יזום של Windows MCP Bridge
+  if (stopWindowsBridgeBtn) {
+    stopWindowsBridgeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const shuttingDownMsg = typeof t === 'function' ? t('winShuttingDown', currentLang) : 'מכבה שרת... ⏳';
+      const shutdownSuccessMsg = typeof t === 'function' ? t('winShutdownSuccess', currentLang) : 'שרת ה-Bridge כובה בהצלחה! 🛑';
+
+      setInlineResult(resWindows, shuttingDownMsg, 'loading');
+      stopWindowsBridgeBtn.disabled = true;
+
+      chrome.runtime.sendMessage({ action: 'SHUTDOWN_BRIDGE_SERVER' }, () => {
+        stopWindowsBridgeBtn.disabled = false;
+        setInlineResult(resWindows, shutdownSuccessMsg, 'error');
+        checkWindowsBridgeStatus();
+      });
+    });
+  }
+
   if (testSupabaseBtn) {
     testSupabaseBtn.addEventListener('click', () => {
       setInlineResult(resSupabase, 'בודק...', 'loading');
@@ -949,17 +1052,40 @@ document.addEventListener('DOMContentLoaded', () => {
           const currentVersion = (chrome.runtime.getManifest().version || '').trim();
 
           if (latestTag && latestTag !== currentVersion) {
-            showStatus(`${t('updateAvailable', currentLang)} (v${latestTag})`, 'success');
-            setTimeout(() => {
-              if (confirm(`${t('updateAvailable', currentLang)} (v${latestTag})\n\n${t('updateRunScriptHint', currentLang)}\n\n${t('updateOpenGitHub', currentLang)}?`)) {
-                window.open(release.html_url || 'https://github.com/SSSHMUEL/GemMCP/releases', '_blank');
+            // בדיקה האם שרת ה-Bridge פעיל כדי להציע עדכון אוטומטי
+            chrome.runtime.sendMessage({ action: 'TEST_SERVICE_CONNECTION', service: 'windows' }, (bridgeRes) => {
+              const isBridgeOnline = bridgeRes && bridgeRes.success;
+
+              if (isBridgeOnline) {
+                const confirmMsg = (t('updateBridgeAutoConfirm', currentLang) || '').replace('{version}', `v${latestTag}`);
+                if (confirm(confirmMsg)) {
+                  showStatus(t('updateDownloading', currentLang), 'info');
+                  checkForUpdateBtn.classList.add('spinning');
+
+                  chrome.runtime.sendMessage({ action: 'TRIGGER_BRIDGE_UPDATE' }, (updateRes) => {
+                    checkForUpdateBtn.classList.remove('spinning');
+                    if (updateRes && updateRes.success) {
+                      showStatus(t('updateSuccessReload', currentLang), 'success');
+                      setTimeout(() => {
+                        chrome.runtime.reload();
+                      }, 1500);
+                    } else {
+                      showStatus(`${t('updateError', currentLang)}: ${updateRes?.error || 'שגיאה לא ידועה'}`, 'error');
+                    }
+                  });
+                  return;
+                }
+              } else {
+                const hint = `${t('updateAvailable', currentLang)} (v${latestTag})\n\n${t('updateBridgeOffline', currentLang)}\n\n${t('updateOpenGitHub', currentLang)}?`;
+                if (confirm(hint)) {
+                  window.open(release.html_url || 'https://github.com/SSSHMUEL/GemMCP/releases', '_blank');
+                }
               }
-            }, 300);
+            });
           } else {
             showStatus(`${t('updateUpToDate', currentLang)} (v${currentVersion})`, 'success');
           }
         } else {
-          // If no releases yet, check latest commit info or notify up-to-date
           const manifestVer = chrome.runtime.getManifest().version;
           showStatus(`${t('updateUpToDate', currentLang)} (v${manifestVer})`, 'success');
         }

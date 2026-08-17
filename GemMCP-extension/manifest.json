@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "GemMCP for Gemini",
-  "version": "2.0.1",
-  "description": "חבר שירותי MCP (Supabase, GitHub, Web Scraper, Custom MCP) ישירות ל-Google Gemini Web",
+  "name": "GemMCP for Gemini (patched)",
+  "version": "2.1.2",
+  "version_name": "2.1.2-patched",
+  "description": "חבר שירותי MCP (Supabase, GitHub, Web Scraper, Custom MCP) ישירות ל-Google Gemini Web. גרסה מתוקנת: 5 תיקוני באגים, /api/update הוסר, אישור פעולה כברירת מחדל.",
   "permissions": [
     "storage",
     "activeTab",

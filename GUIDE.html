@@ -311,12 +311,13 @@
 <div class="wrap">
 
   <header class="masthead">
-    <p class="eyebrow">GemMCP 2.0.1 · Windows</p>
+    <p class="eyebrow">GemMCP 2.1.2-patched · Windows</p>
     <h1>התקנת GemMCP מאפס</h1>
     <p class="standfirst">
       GemMCP נותן ל־Gemini Web ידיים: הוא מחבר את הצ׳אט בדפדפן לשרת מקומי קטן שרץ על המחשב,
       וכך בקשה בעברית פשוטה הופכת לפעולה אמיתית — פתיחת תוכנה, קריאת קובץ, שאילתת SQL.
-      המדריך הזה כולל שלושה תיקוני באגים שהגרסה הרשמית סובלת מהם.
+      העותק הזה מבוסס על 2.1.2 וכולל שבעה תיקוני באגים שאינם בגרסה הרשמית,
+      ובלי ה־endpoint שמאפשר החלפת קוד ללא אימות.
     </p>
   </header>
 
@@ -340,11 +341,11 @@ Gemini: "המחשבון נפתח ומוכן לשימוש."
   </div>
 
   <div class="note info" style="margin-bottom:2.5rem;">
-    <span class="note-label">הדרך הקצרה</span>
+    <span class="note-label">אין צורך לגעת בקוד</span>
     <p>
-      אם יש לך גישה למחשב שכבר עבר את התהליך — פשוט העתק ממנו את שתי התיקיות
-      <code>GemMCP</code> ו־<code>GemMCP-extension</code> ודלג ישר לשלב 4.
-      הן כבר כוללות את שלושת התיקונים, ואז אין צורך לגעת בקוד בכלל.
+      שתי התיקיות שמצורפות כאן — <code>GemMCP</code> ו־<code>GemMCP-extension</code> —
+      כבר מכילות את כל שבעת התיקונים. פשוט עקוב אחרי השלבים.
+      פירוט מה תוקן ולמה נמצא <a href="#patches">בהמשך הדף</a>, אם מעניין אותך.
     </p>
   </div>
 
@@ -397,10 +398,15 @@ WIN_ALLOWED_PATH=C:\Users\&lt;שם&gt;\Desktop</code></pre>
     <div class="step">
       <div class="step-num">3</div>
       <div class="step-body">
-        <h2>החל את שלושת התיקונים</h2>
+        <h2>ודא שזו הגרסה המתוקנת</h2>
         <p>
-          גרסה 2.0.1 מגיעה עם שלושה באגים אמיתיים — אחד מהם משבית קובץ שלם.
-          הפירוט המדויק נמצא <a href="#patches">בהמשך הדף</a>. אל תדלג על השלב הזה.
+          פתח את <code>manifest.json</code> שבתיקייה הראשית. שתי השורות האלה צריכות להיות שם:
+        </p>
+        <pre><code>"name": "GemMCP for Gemini (patched)",
+"version_name": "2.1.2-patched",</code></pre>
+        <p>
+          אם הן חסרות, הורדת את הגרסה הרשמית ולא את זו — ואז שבעת הבאגים
+          <a href="#patches">שמפורטים למטה</a> קיימים אצלך.
         </p>
       </div>
     </div>
@@ -461,17 +467,17 @@ icons\           popup\</code></pre>
     <div class="step">
       <div class="step-num">7</div>
       <div class="step-body">
-        <h2>כבה את ההרצה האוטומטית</h2>
+        <h2>בדוק את מתג ההרצה האוטומטית</h2>
         <p>
-          פתח <a href="https://gemini.google.com">gemini.google.com</a>, לחץ על תג <strong>GemMCP</strong>
-          בפינה, והורד את הסימון מ־<strong>Auto-Run Approval</strong>.
+          פתח <a href="https://gemini.google.com">gemini.google.com</a> ולחץ על תג <strong>GemMCP</strong>
+          בפינה. <strong>Auto-Run Approval</strong> צריך להיות <strong>לא מסומן</strong>.
         </p>
-        <div class="note danger">
-          <span class="note-label">זה דלוק כברירת מחדל</span>
+        <div class="note warn">
+          <span class="note-label">בגרסה הרשמית זה דלוק כברירת מחדל</span>
           <p>
             כשהמתג מסומן, כל פקודה ש־Gemini מחליט לפלוט רצה על המחשב <strong>לפני</strong> שאתה רואה אותה.
             כשהוא כבוי מופיע כרטיס <strong>"אשר והרץ"</strong> עם ה־JSON המלא, ואתה מחליט.
-            ההגדרה נשמרת, אז זו לחיצה חד־פעמית.
+            בעותק הזה ברירת המחדל הפוכה — אישור — אבל שווה לוודא בעין.
           </p>
         </div>
       </div>
@@ -497,12 +503,20 @@ icons\           popup\</code></pre>
 
   <!-- ================= PATCHES ================= -->
   <div id="patches" class="section-head">
-    <p class="eyebrow">שלב 3 · במלואו</p>
-    <h2>שלושת התיקונים</h2>
+    <p class="eyebrow">כבר מוחל · לידיעתך</p>
+    <h2>מה תוקן ולמה</h2>
     <p style="color:var(--ink-soft);">
-      כל השלושה אומתו על התקנה חיה. אם תעדכן גרסה בעתיד דרך <code>update.bat</code>,
-      התיקונים יידרסו ותצטרך להחיל אותם מחדש.
+      שבעה תיקונים, כולם אומתו על התקנה חיה, ואף אחד מהם אינו במאגר הרשמי — גם לא ב־2.1.2.
+      אינך צריך לעשות איתם כלום; הם כבר בקבצים. הפירוט כאן כדי שתדע מה שונה,
+      ובעיקר כדי שתזהה מה תאבד אם תעדכן מהמאגר הרשמי.
     </p>
+    <div class="note danger">
+      <span class="note-label">עדכון גרסה ידרוס את הכל</span>
+      <p>
+        <code>update.bat</code> מושך את הגרסה האחרונה מ־GitHub. הרצתו תחזיר את שבעת הבאגים
+        ותחזיר את ה־endpoint שהוסר. השווה מול העותק הזה לפני שאתה מעדכן.
+      </p>
+    </div>
   </div>
 
   <div class="patch">
@@ -653,6 +667,96 @@ if (!inserted || !(target.innerText || target.textContent || '').trim()) {
     </div>
   </div>
 
+  <div class="patch">
+    <div class="patch-head">
+      <span class="patch-file">content.js</span>
+      <span style="color:var(--ink-faint); font-size:0.85rem;">זיהוי פקודות נחסם לנצח</span>
+    </div>
+    <p class="symptom">
+      התסמין: שולחים בקשה, Gemini פולט JSON תקין — וכלום לא קורה. אין כרטיס אישור, אין שגיאה.
+    </p>
+    <p>
+      השורש: <code>isGeminiGenerating()</code> החזירה <code>true</code> אם קיים בדף
+      <strong>כל</strong> <code>mat-progress-bar</code> או <code>mat-spinner</code>, גם מוסתר לחלוטין.
+      בדף של Gemini תמיד יש כאלה. מכיוון ש<code>scanForToolCalls</code> נסוגה כל עוד היא מחזירה
+      <code>true</code>, הסריקה נדחתה שוב ושוב בלי גבול.
+    </p>
+    <p>
+      התיקון מוסיף בדיקת נראות אמיתית, ומאפשר סריקה גם בזמן יצירה. ההגנה מפני JSON חלקי
+      עברה לבדיקת יציבות — בלוק צריך להישאר עם טקסט זהה 700ms לפני שפועלים עליו,
+      כך ש־JSON שעדיין מוזרם לא ייתפס באמצע.
+    </p>
+    <p style="font-size:0.9rem; color:var(--ink-soft);">
+      אומת מול יצירה אמיתית: כרטיס האישור הופיע תוך 900ms בזמן ש־Gemini שידר בפועל.
+    </p>
+  </div>
+
+  <div class="patch">
+    <div class="patch-head">
+      <span class="patch-file">content.js</span>
+      <span style="color:var(--ink-faint); font-size:0.85rem;">לולאת שליחה אינסופית</span>
+    </div>
+    <p class="symptom">
+      התסמין: התוסף נתקע על <code>ממתין לסיום התשובה של Gemini</code> ולא משתחרר, גם אחרי דקות.
+    </p>
+    <p>
+      ב־<code>attemptSend</code>, ה־<code>return</code> של "עדיין מייצר" יושב <strong>לפני</strong>
+      בדיקת <code>attempts &gt;= maxAttempts</code>, ולכן תקרת 90 הניסיונות לא הייתה ניתנת להשגה
+      בזמן המתנה. נוספה תקרה נפרדת של 15 שניות, ואחריה הוא שולח בכל זאת:
+    </p>
+<pre><code>[14:18:22] ממתין לסיום התשובה של Gemini כדי לשלוח תוצאה...
+[14:18:36] ג'מיני עדיין מסומן כמייצר לאחר 15 שניות – שולח בכל זאת</code></pre>
+  </div>
+
+  <div class="patch">
+    <div class="patch-head">
+      <span class="patch-file">content.js</span>
+      <span style="color:var(--ink-faint); font-size:0.85rem;">ה־interceptor בולע את ה־Enter</span>
+    </div>
+    <p class="symptom">
+      התסמין: מקלידים הודעה, לוחצים Enter, וכלום לא נשלח. לפעמים ההנחיה של GemMCP
+      נערמת בתיבה שוב ושוב.
+    </p>
+    <p>
+      <code>attachUserIntentInterceptor</code> העשיר את תוכן הקומפוזר סינכרונית בתוך הטיפול
+      באירוע השליחה, ואז נתן לאירוע המקורי להמשיך ל־Gemini — לפני שהמודל של Angular הספיק
+      להתעדכן. כעת האירוע המקורי נעצר, ההעשרה מתבצעת, והשליחה מופעלת מחדש אחרי 150ms.
+      אם אין מה להעשיר, האירוע לא נוגע כלל.
+    </p>
+  </div>
+
+  <div class="patch">
+    <div class="patch-head">
+      <span class="patch-file">content.js</span>
+      <span style="color:var(--ink-faint); font-size:0.85rem;">ברירת מחדל בטוחה ל־Auto-Run</span>
+    </div>
+    <p class="symptom">
+      התסמין: המתג חוזר להיות דלוק מעצמו, בלי הודעה.
+    </p>
+    <p>
+      <code>isAutoExecute</code> היה <code>true</code> בשני מקומות, ולכן כל אובדן של המפתח
+      <code>autoExecute</code> מ־<code>chrome.storage</code> — למשל הסרה והוספה מחדש של התוסף —
+      החזיר בשקט הרצה ללא אישור. שונה ל־<code>false</code>: המצב הבטוח הוא זה שנופלים אליו.
+    </p>
+  </div>
+
+  <div class="patch" style="border-color: color-mix(in srgb, var(--danger) 40%, var(--rule));">
+    <div class="patch-head">
+      <span class="patch-file">bridge-server/server.js</span>
+      <span style="color:var(--danger); font-size:0.85rem;">‎/api/update‎ הוסר</span>
+    </div>
+    <p class="symptom">
+      נוסף ב־2.1.2: endpoint שמריץ <code>git pull</code> או מוריד ZIP מ־GitHub ומחליף את הקוד
+      המקומי, הכל דרך PowerShell — <strong>בלי שום אימות</strong>.
+    </p>
+    <p>
+      מכיוון שה־CORS מאשר גם בקשות ללא <code>origin</code>, כל תהליך מקומי שמגיע
+      ל־<code>localhost:3000</code> היה יכול לגרום למחשב להוריד ולהריץ קוד חדש.
+      ה־endpoint נמחק (110 שורות), ו־<code>triggerBridgeUpdate</code> ב־<code>background.js</code>
+      מחזירה הודעה מסבירה במקום לפנות אליו.
+    </p>
+  </div>
+
   <!-- ================= SECURITY ================= -->
   <div class="section-head" style="margin-top:2.5rem;">
     <p class="eyebrow">חובה לקרוא</p>
@@ -703,7 +807,7 @@ if (!inserted || !(target.innerText || target.textContent || '').trim()) {
         </tr>
         <tr>
           <td>שום דבר לא קורה אחרי בקשה</td>
-          <td>לפעמים Gemini נתקע במצב ״מייצר״ אחרי שפלט JSON — הכפתור נשאר על <em>Stop response</em>. התוסף ממתין לסיום היצירה, אז לחץ על עצירה וזה ישתחרר מיד.</td>
+          <td>Gemini לפעמים נתקע במצב ״מייצר״ אחרי שכבר סיים — אומת בצ׳אט נקי לגמרי, בלי GemMCP, על שאילתת <code>1+1</code>. שני התיקונים בקובץ <code>content.js</code> מטפלים בזה. אם עדיין נתקע, לחץ <em>Stop response</em> וזה ישתחרר.</td>
         </tr>
         <tr>
           <td>תג GemMCP לא מופיע</td>
@@ -723,8 +827,8 @@ if (!inserted || !(target.innerText || target.textContent || '').trim()) {
 
   <footer>
     <p style="margin:0;">
-      GemMCP הוא קוד פתוח ברישיון MIT מאת SSSHMUEL. שלושת התיקונים שבמדריך הם מקומיים
-      ואינם חלק מהמאגר הרשמי. השימוש באחריות המשתמש.
+      GemMCP הוא קוד פתוח ברישיון MIT מאת SSSHMUEL. שבעת התיקונים והסרת
+      <code>/api/update</code> הם מקומיים ואינם חלק מהמאגר הרשמי. השימוש באחריות המשתמש.
     </p>
   </footer>
 

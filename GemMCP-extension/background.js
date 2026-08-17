@@ -276,6 +276,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  // 🔄 הפעלת עדכון אוטומטי מלא דרך שרת ה-Bridge
+  if (request.action === 'TRIGGER_BRIDGE_UPDATE') {
+    triggerBridgeUpdate()
+      .then((res) => sendResponse({ success: true, data: res }))
+      .catch((err) => sendResponse({ success: false, error: err.message || err }));
+    return true;
+  }
+
   // 🚀 משיכת פרויקטים ומפתחות אוטומטית מ-Supabase לפי Access Token
   if (request.action === 'SUPABASE_AUTO_DISCOVER') {
     discoverSupabaseProjects(request.token)
@@ -286,18 +294,37 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 });
 
 /**
+ * 🔄 הרצת עדכון אוטומטי מלא דרך שרת ה-Bridge
+ */
+async function triggerBridgeUpdate() {
+  // העדכון האוטומטי מושבת בגרסה הזו. ה-endpoint /api/update שהוא קרא אליו הוסר
+  // מהשרת: הוא היה ללא אימות והריץ git pull / הורדת ZIP והחלפת קוד דרך
+  // PowerShell, כך שכל תהליך מקומי היה יכול להחליף את הקוד שרץ על המחשב.
+  // בנוסף, עדכון אוטומטי היה דורס את התיקונים המקומיים שגרסה זו מבוססת עליהם.
+  throw new Error(
+    'העדכון האוטומטי מושבת בגרסה המתוקנת הזו. ' +
+    'עדכן ידנית ובדוק קודם שהתיקונים המקומיים עדיין קיימים.'
+  );
+}
+
+/**
  * 🛑 כיבוי שרת ה-Bridge
  */
 async function shutdownBridgeServer() {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 2000);
   try {
     const res = await fetch('http://127.0.0.1:3000/api/shutdown', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal
     });
+    clearTimeout(timeoutId);
     if (res.ok) {
       return 'שרת ה-Bridge כובה בהצלחה.';
     }
   } catch (e) {
+    clearTimeout(timeoutId);
     // השרת נסגר וניתק את החיבור
     return 'שרת ה-Bridge נסגר.';
   }

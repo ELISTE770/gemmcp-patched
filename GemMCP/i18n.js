@@ -23,6 +23,10 @@ const I18N_DICT = {
     updateError: 'שגיאה בבדיקת עדכון',
     updateOpenGitHub: 'פתח עמוד עדכון ↗',
     updateRunScriptHint: 'להתקנת עדכון: הפעל את update.bat בתיקיית הפרויקט',
+    updateBridgeAutoConfirm: 'גרסה חדשה זמינה ({version})!\n\nשרת ה-Bridge פעיל. האם להוריד ולהתקין את העדכון אוטומטית כעת דרך ה-Bridge?',
+    updateDownloading: '⏳ מוריד ומתקין עדכון דרך שרת ה-Bridge...',
+    updateSuccessReload: '✅ העדכון הותקן בהצלחה! מרענן את התוסף...',
+    updateBridgeOffline: 'שרת ה-Bridge כבוי. הפעל אותו כדי לעדכן אוטומטית בלחיצה אחת, או פתח את GitHub.',
 
     // Windows MCP Card
     winTitle: 'Windows MCP',
@@ -50,6 +54,9 @@ const I18N_DICT = {
     winDownloadNodeBtn: 'הורדת Node.js חינם',
     winRetryBtn: 'נסה שוב',
     winTestBtn: 'בדוק חיבור ל-Windows Bridge',
+    winStopBtn: 'כבה שרת 🛑',
+    winShuttingDown: 'מכבה שרת... ⏳',
+    winShutdownSuccess: 'שרת ה-Bridge כובה בהצלחה! 🛑',
 
     // Scraper Card
     fetchTitle: 'Web Scraper',
@@ -89,7 +96,7 @@ const I18N_DICT = {
 
     // Custom MCP Card
     customTitle: 'שרתי MCP מותאמים',
-    customDesc: 'הוספת שרטים מותאמים, קוד חיבור ופרומפטים',
+    customDesc: 'הוספת שרתים מותאמים, קוד חיבור ופרומפטים',
     customCountPill: ' מוגדרים',
     customAddBtn: 'הוסף שרת MCP מותאם אישית',
     customServerNamePlaceholder: 'שם השרת (לדוגמה: Filesystem)',
@@ -103,6 +110,8 @@ const I18N_DICT = {
     testConnBtn: 'בדוק חיבור',
     disconnectBtn: 'התנתק',
     promptEditorToggle: '📝 עריכת פרומפט והנחיות ל-Gemini',
+    saveBtnText: 'שמור',
+    saveBtnSuccess: 'נשמר בהצלחה! ✅',
     promptResetBtn: '↺ שחזר לברירת מחדל',
     promptHelper: 'הנחיות אלו מוזרקות לג\'מיני כשהשירות פעיל ובתפריט ה-@.',
     promptLabelPrefix: 'הנחיות לכלי ',
@@ -145,7 +154,7 @@ const I18N_DICT = {
     helpFeatCustom: '🧩 <strong>שרתי MCP מותאמים</strong> – הוספת כל שרת MCP חיצוני (Local או SSE / Remote).',
     helpHowTitle: 'איך משתמשים בזה? (3 צעדים פשוטים)',
     helpStep1Title: 'חיבור והפעלת השירותים הרצויים:',
-    helpStep1Desc: 'בחלון זה, לחץ על השירות שברצונך לחבר (התחברות בקליק או הזנת API Key) והפעל את המתג שלו למצב פעיל (ON). לחץ על <em>"שמור את כל ההגדרות"</em>.',
+    helpStep1Desc: 'בחלון זה, לחץ על השירות שברצונך לחבר (התחברות בקליק או הזנת API Key) והפעל את המתג שלו למצב פעיל (ON). כל שינוי נשמר אוטומטית באופן מיידי.',
     helpStep2Title: 'גלישה לאתר Gemini:',
     helpStep2Desc: 'פתח את <a href="https://gemini.google.com" target="_blank" class="help-link">gemini.google.com ↗</a>. תראה בפינת המסך את הווידג\'ט הצף של GemMCP.',
     helpStep3Title: 'הפעלת הפרומפט ודיבור חופשי:',
@@ -173,6 +182,10 @@ const I18N_DICT = {
     updateError: 'Failed to check for updates',
     updateOpenGitHub: 'Open Release Page ↗',
     updateRunScriptHint: 'To update: Run update.bat in project folder',
+    updateBridgeAutoConfirm: 'New version available ({version})!\n\nWindows Bridge is online. Would you like to download and install the update automatically now?',
+    updateDownloading: '⏳ Downloading and applying update via Bridge...',
+    updateSuccessReload: '✅ Update installed successfully! Reloading extension...',
+    updateBridgeOffline: 'Bridge server is offline. Start it to update in 1-click, or open GitHub.',
 
     // Windows MCP Card
     winTitle: 'Windows MCP',
@@ -200,6 +213,9 @@ const I18N_DICT = {
     winDownloadNodeBtn: 'Download Node.js Free',
     winRetryBtn: 'Retry',
     winTestBtn: 'Test Windows Bridge Connection',
+    winStopBtn: 'Stop Server 🛑',
+    winShuttingDown: 'Stopping server... ⏳',
+    winShutdownSuccess: 'Bridge server stopped successfully! 🛑',
 
     // Scraper Card
     fetchTitle: 'Web Scraper',
@@ -253,6 +269,8 @@ const I18N_DICT = {
     testConnBtn: 'Test Connection',
     disconnectBtn: 'Disconnect',
     promptEditorToggle: '📝 Edit System Prompt for Gemini',
+    saveBtnText: 'Save',
+    saveBtnSuccess: 'Saved! ✅',
     promptResetBtn: '↺ Reset to Default',
     promptHelper: 'Injected into Gemini when the service is active and in @ menu.',
     promptLabelPrefix: 'Instructions for ',
@@ -295,7 +313,7 @@ const I18N_DICT = {
     helpFeatCustom: '🧩 <strong>Custom MCP Servers</strong> – Connect any custom local or remote MCP SSE server.',
     helpHowTitle: 'How to use? (3 Simple Steps)',
     helpStep1Title: 'Connect & Enable Services:',
-    helpStep1Desc: 'In this popup, click to connect your services (1-click OAuth or manual keys) and toggle their switches ON. Click <em>"Save All Settings"</em>.',
+    helpStep1Desc: 'In this popup, click to connect your services (1-click OAuth or manual keys) and toggle their switches ON. Changes are saved automatically in real time.',
     helpStep2Title: 'Open Google Gemini:',
     helpStep2Desc: 'Go to <a href="https://gemini.google.com" target="_blank" class="help-link">gemini.google.com ↗</a>. You will see the floating GemMCP widget.',
     helpStep3Title: 'Activate & Prompt freely:',

@@ -742,19 +742,35 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', bridge: 'GemMCP-Gemini-Bridge', platform: process.platform });
 });
 
+// עדכון אוטומטי של התוסף ושרת ה-Bridge ישירות מ-GitHub
+// ---------------------------------------------------------------------------
+// /api/update הוסר בכוונה.
+//
+// בגרסה 2.1.2 הוא היה endpoint ללא שום אימות שמריץ git pull או מוריד ZIP
+// מ-GitHub ומחליף את הקוד המקומי דרך PowerShell. מכיוון שה-CORS מאשר גם
+// בקשות ללא origin, כל תהליך מקומי שמגיע ל-localhost:3000 היה יכול לגרום
+// למחשב להוריד ולהריץ קוד חדש. עדכון גרסה נעשה ידנית.
+// ---------------------------------------------------------------------------
+
 // כיבוי שרת ה-Bridge לפי בקשת המשתמש
 app.post('/api/shutdown', (req, res) => {
   res.json({ success: true, message: 'שרת ה-Bridge נסגר בהצלחה.' });
   console.log('🛑 התקבלה בקשת כיבוי שרת מהתוסף - סוגר תהליך...');
+  try {
+    if (typeof server !== 'undefined' && server.close) {
+      server.close();
+    }
+  } catch (e) {}
   setTimeout(() => {
     process.exit(0);
-  }, 400);
+  }, 100);
 });
 
 // הפעלת השרת
-app.listen(PORT, HOST, () => {
+const server = app.listen(PORT, HOST, () => {
   console.log(`\n==================================================`);
   console.log(`🚀 Windows Bridge Server רץ ומאזין בכתובת: http://${HOST}:${PORT}`);
   console.log(`🔒 נעול לגישה מקומית בלבד (Localhost / Extensions)`);
   console.log(`==================================================\n`);
 });
+
