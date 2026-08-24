@@ -73,10 +73,23 @@ function dir(p, permissions) {
 
   console.log('');
   console.log('=== permission ceiling: .env must win over the client ===');
-  const esc = await call({ action: 'run_command', params: { command: 'whoami' }, permissions: { runCommands: true } });
-  check('client cannot grant itself runCommands', esc.status === 403, 'got ' + esc.status);
-  const escW = await call({ action: 'write_file', params: { path: DESKTOP + '/_t.txt', content: 'x' }, permissions: { writeFiles: true } });
-  check('client cannot grant itself writeFiles', escW.status === 403, 'got ' + escW.status);
+  // הבדיקה נגזרת מהתקרה בפועל ולא מניחה אותה: מה שכבוי בשרת חייב להישאר כבוי
+  // גם כשהלקוח מבקש אותו במפורש.
+  const ceiling = health.permissions || {};
+
+  if (ceiling.runCommands === false) {
+    const esc = await call({ action: 'run_command', params: { command: 'whoami' }, permissions: { runCommands: true } });
+    check('client cannot grant itself runCommands', esc.status === 403, 'got ' + esc.status);
+  } else {
+    console.log('  [skip] runCommands is enabled in .env - nothing to escalate');
+  }
+
+  if (ceiling.writeFiles === false) {
+    const escW = await call({ action: 'write_file', params: { path: DESKTOP + '/_gemmcp_probe.txt', content: 'x' }, permissions: { writeFiles: true } });
+    check('client cannot grant itself writeFiles', escW.status === 403, 'got ' + escW.status);
+  } else {
+    console.log('  [skip] writeFiles is enabled in .env - nothing to escalate');
+  }
   const escP = await call(dir('C:/Windows/System32', { readFiles: true, allowedPath: 'C:/' }));
   check('client cannot widen allowedPath', !(escP.json && escP.json.success), 'got ' + escP.status);
   const narrow = await call(dir(DESKTOP, { readFiles: false }));

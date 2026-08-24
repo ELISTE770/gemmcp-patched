@@ -1068,7 +1068,7 @@
 
       const text = el.innerText || cheap;
 
-      if (text.includes('{') && (text.includes('"action"') || text.includes('"service"') || text.includes('"app_name"') || text.includes('"command"') || text.includes('"path"') || text.includes('execute_sql') || text.includes('"query"'))) {
+      if (text.includes('{') && (text.includes('"action"') || text.includes('"service"') || text.includes('"app_name"') || text.includes('"command"') || text.includes('"path"') || text.includes('execute_sql') || text.includes('"query"') || text.includes('"plan"'))) {
         const toolCall = parseToolCall(text);
         if (toolCall) {
           // בזמן יצירה פועלים רק אחרי שהבלוק הפסיק להשתנות. לא מסמנים כמטופל,
@@ -1186,6 +1186,12 @@
         else if (appLow === 'clock' || appLow === 'שעון') parsed.app_name = 'clock';
       }
       
+      // תוכנית: שומרים על המערך כמו שהוא ומסמנים כשירות windows
+      if (Array.isArray(parsed.plan) && parsed.plan.length) {
+        parsed.service = normalizeServiceName(parsed.service || 'windows');
+        return parsed;
+      }
+
       // נרמול וזיהוי שירות אוטומטי
       if (parsed.service) {
         parsed.service = normalizeServiceName(parsed.service);
@@ -1268,6 +1274,11 @@
     create_issue:    { level: 'warn',    label: 'פתיחת issue',        icon: '🐛' },
     execute_sql:     { level: 'warn',    label: 'שאילתת SQL',         icon: '🗄️' },
     clipboard_write: { level: 'warn',    label: 'כתיבה ללוח',         icon: '📋' },
+    move_file:       { level: 'danger',  label: 'העברת קובץ',         icon: '📦' },
+    delete_file:     { level: 'danger',  label: 'מחיקה לסל המיחזור',  icon: '🗑️' },
+    copy_file:       { level: 'warn',    label: 'העתקת קובץ',         icon: '📄' },
+    make_dir:        { level: 'warn',    label: 'יצירת תיקייה',       icon: '📁' },
+    find_files:      { level: 'safe',    label: 'חיפוש קבצים',        icon: '🔍' },
     open_app:        { level: 'safe',    label: 'פתיחת תוכנה',        icon: '🚀' },
     read_file:       { level: 'safe',    label: 'קריאת קובץ',         icon: '📄' },
     list_directory:  { level: 'safe',    label: 'סריקת תיקייה',       icon: '📂' },
@@ -1281,12 +1292,41 @@
     search:          { level: 'safe',    label: 'חיפוש',              icon: '🔍' }
   };
 
+  const PLAN_RISK_ORDER = { safe: 0, warn: 1, danger: 2 };
+
   function classifyAction(toolCall) {
+    // תוכנית מקבלת את דרגת הסיכון של השלב המסוכן ביותר שבה. אחרת שלב הרסני
+    // אחד היה מסתתר בתוך רשימה שנראית תמימה.
+    if (Array.isArray(toolCall.plan) && toolCall.plan.length) {
+      let worst = { level: 'safe', label: '', icon: '' };
+      for (const step of toolCall.plan) {
+        const r = ACTION_RISK[String(step.action || '').replace(/^[a-z]+:/, '')] ||
+                  { level: 'warn', label: step.action || 'פעולה', icon: '❓' };
+        if (PLAN_RISK_ORDER[r.level] > PLAN_RISK_ORDER[worst.level]) worst = r;
+      }
+      return {
+        level: worst.level,
+        label: `תוכנית בת ${toolCall.plan.length} שלבים`,
+        icon: worst.level === 'danger' ? '⚡' : (worst.level === 'warn' ? '📋' : '📋')
+      };
+    }
     const action = String(toolCall.action || toolCall.tool_name || '').replace(/^[a-z]+:/, '');
     return ACTION_RISK[action] || { level: 'warn', label: action || 'פעולה', icon: '❓' };
   }
 
+  // תיאור אנושי של כל שלב בתוכנית, לפי הסדר
+  function describePlan(service, toolCall) {
+    return toolCall.plan.map((step, i) => {
+      const r = ACTION_RISK[String(step.action || '').replace(/^[a-z]+:/, '')] ||
+                { level: 'warn', icon: '❓' };
+      return `${i + 1}. ${r.icon} ${describeAction(service, step)}`;
+    }).join('\n');
+  }
+
   function requiresExplicitApproval(service, toolCall) {
+    // תוכנית תמיד עוברת אישור: היא מבצעת כמה פעולות ברצף, וזה בדיוק המקרה
+    // שבו המשתמש צריך לראות מה עומד לקרות לפני שזה קורה.
+    if (Array.isArray(toolCall.plan) && toolCall.plan.length) return true;
     return classifyAction(toolCall).level === 'danger';
   }
 
@@ -1296,6 +1336,11 @@
     const action = String(toolCall.action || toolCall.tool_name || '').replace(/^[a-z]+:/, '');
     switch (action) {
       case 'open_app':        return `לפתוח את התוכנה "${t(toolCall.app_name)}"`;
+      case 'find_files':      return `לחפש "${t(toolCall.pattern)}" תחת ${t(toolCall.path)}`;
+      case 'make_dir':        return `ליצור את התיקייה ${t(toolCall.path)}`;
+      case 'copy_file':       return `להעתיק ${t(toolCall.from)} אל ${t(toolCall.to)}`;
+      case 'move_file':       return `להעביר ${t(toolCall.from)} אל ${t(toolCall.to)}`;
+      case 'delete_file':     return `למחוק לסל המיחזור: ${t(toolCall.path)}`;
       case 'read_file':       return `לקרוא את הקובץ ${t(toolCall.path)}`;
       case 'list_directory':  return `לסרוק את התיקייה ${t(toolCall.path)}`;
       case 'write_file':      return `לכתוב ${t(toolCall.content).length} תווים לקובץ ${t(toolCall.path)}`;
@@ -1348,8 +1393,10 @@
     card.appendChild(summary);
 
     const human = document.createElement('div');
-    human.style.cssText = 'font-size:12.5px; line-height:1.55; color:#cbd5e1; margin:2px 0 8px; word-break:break-word;';
-    human.textContent = describeAction(service, toolCall);
+    human.style.cssText = 'font-size:12.5px; line-height:1.6; color:#cbd5e1; margin:2px 0 8px; word-break:break-word; white-space:pre-line;';
+    human.textContent = Array.isArray(toolCall.plan) && toolCall.plan.length
+      ? describePlan(service, toolCall)
+      : describeAction(service, toolCall);
     card.appendChild(human);
 
     // תצוגה מקדימה של התוכן שעומד להיכתב, במקום רק שם הקובץ

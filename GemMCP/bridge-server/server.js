@@ -5,6 +5,8 @@ const fs = require('fs');
 const os = require('os');
 const { exec, execFile } = require('child_process');
 const crypto = require('crypto');
+const { createFileActions } = require('./actions-files');
+const { runPlan, MAX_STEPS } = require('./plan-runner');
 const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
@@ -642,7 +644,7 @@ function auditLog(action, params, outcome, detail) {
 }
 
 // Endpoint מרכזי לביצוע פעולות Windows MCP
-app.post('/api/windows/execute', async (req, res) => {
+async function handleWindowsExecute(req, res) {
   try {
     const { action, params = {}, permissions = {} } = req.body;
     const perms = resolvePermissions(permissions);
@@ -683,7 +685,24 @@ app.post('/api/windows/execute', async (req, res) => {
           return res.status(404).json({ success: false, error: `הקובץ אינו קיים: ${params.path}` });
         }
         const content = fs.readFileSync(filePath, 'utf8');
-        return res.json({ success: true, data: { path: params.path, content: content.slice(0, 50000), truncated: content.length > 50000 } });
+
+        // חלון קריאה נשלט במקום חיתוך קבוע ב-50k. קובץ גדול נקרא בקטעים
+        // רצופים במקום להיחתך בשקט באמצע.
+        const rfOffset = Math.max(0, Number(params.offset) || 0);
+        const rfLimit = Math.min(Math.max(1, Number(params.limit) || 50000), 200000);
+        const slice = content.slice(rfOffset, rfOffset + rfLimit);
+
+        return res.json({
+          success: true,
+          data: {
+            path: params.path,
+            totalChars: content.length,
+            offset: rfOffset,
+            returned: slice.length,
+            hasMore: rfOffset + slice.length < content.length,
+            content: slice
+          }
+        });
       }
 
       // 2. רשימת קבצים בתיקייה
@@ -695,12 +714,30 @@ app.post('/api/windows/execute', async (req, res) => {
         if (!fs.existsSync(dirPath)) {
           return res.status(404).json({ success: false, error: `התיקייה אינה קיימת: ${params.path}` });
         }
-        const items = fs.readdirSync(dirPath, { withFileTypes: true }).map(item => ({
+        const all = fs.readdirSync(dirPath, { withFileTypes: true }).map(item => ({
           name: item.name,
           type: item.isDirectory() ? 'directory' : 'file',
           path: path.join(dirPath, item.name)
         }));
-        return res.json({ success: true, data: { directory: dirPath, items: items.slice(0, 100) } });
+
+        // עימוד במקום חיתוך שקט. קודם הוחזרו 100 פריטים בלי שום סימן שיש עוד,
+        // כך שהמודל עבד על תמונה חלקית בלי לדעת את זה.
+        const lsOffset = Math.max(0, Number(params.offset) || 0);
+        const lsLimit = Math.min(Math.max(1, Number(params.limit) || 200), 1000);
+        const lsPage = all.slice(lsOffset, lsOffset + lsLimit);
+
+        return res.json({
+          success: true,
+          data: {
+            directory: dirPath,
+            total: all.length,
+            offset: lsOffset,
+            limit: lsLimit,
+            returned: lsPage.length,
+            hasMore: lsOffset + lsPage.length < all.length,
+            items: lsPage
+          }
+        });
       }
 
       // 3. כתיבה או יצירת קובץ
@@ -924,7 +961,22 @@ app.post('/api/windows/execute', async (req, res) => {
         return;
       }
 
-      // 6. קריאה או כתיבה ללוח (Clipboard)
+      // 6. פעולות קבצים נוספות: העתקה, העברה, מחיקה לסל, יצירת תיקייה, חיפוש
+      case 'make_dir':
+      case 'copy_file':
+      case 'move_file':
+      case 'delete_file':
+      case 'find_files': {
+        const fileActions = createFileActions({ validatePathInScope, perms });
+        try {
+          const data = await fileActions[action](params);
+          return res.json({ success: true, data });
+        } catch (e) {
+          return res.status(e.status || 500).json({ success: false, error: e.message });
+        }
+      }
+
+      // 7. קריאה או כתיבה ללוח (Clipboard)
       case 'clipboard_read': {
         if (!perms.clipboard) {
           return res.status(403).json({ success: false, error: 'הרשאת גישה ללוח (WIN_PERM_CLIPBOARD) כבויה בשרת.' });
@@ -964,6 +1016,108 @@ app.post('/api/windows/execute', async (req, res) => {
   } catch (err) {
     console.error('[Windows MCP Error]:', err.message);
     res.status(500).json({ success: false, error: err.message });
+  }
+}
+
+app.post('/api/windows/execute', handleWindowsExecute);
+
+// ---------------------------------------------------------------------------
+// הרצת תוכנית: רצף פעולות עם העברת ערכים ביניהן.
+//
+// כל שלב מבוצע דרך אותו handler של הפעולה הבודדת, עם res מדומה שקולט את
+// התשובה. כך ההרשאות, בדיקת הנתיב ויומן הביקורת חלים על כל שלב בדיוק כמו על
+// פקודה רגילה, בלי מסלול מקביל שיכול להתפצל מהמקורי.
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// הרצת פקודה עם פלט חי (SSE).
+//
+// run_command הרגיל מחזיר הכל בסוף, אחרי עד 30 שניות של שקט מוחלט. לפעולה
+// ארוכה זה נראה כמו תקיעה, ואין שום דרך לדעת אם משהו קורה. כאן הפלט משודר
+// שורה-שורה בזמן אמת, והטיימאאוט ארוך יותר כי יש חיווי.
+// ---------------------------------------------------------------------------
+app.post('/api/windows/stream', (req, res) => {
+  const { command, permissions = {} } = req.body || {};
+  const perms = resolvePermissions(permissions);
+
+  if (!perms.runCommands) {
+    return res.status(403).json({ success: false, error: 'הרשאת הרצת פקודות מערכת כבויה בהגדרות התוסף או השרת.' });
+  }
+  if (!command) {
+    return res.status(400).json({ success: false, error: 'חסר פרמטר command' });
+  }
+  try {
+    checkDangerousWindowsCommands(command);
+  } catch (e) {
+    return res.status(400).json({ success: false, error: e.message });
+  }
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive'
+  });
+  const send = (event, data) => res.write(`event: ${event}
+data: ${JSON.stringify(data)}
+
+`);
+
+  const child = execFile('powershell.exe',
+    ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command],
+    { cwd: perms.allowedPath || process.cwd(), timeout: 120000, maxBuffer: 1024 * 1024 * 10 });
+
+  let outBytes = 0;
+  child.stdout.on('data', (chunk) => { outBytes += chunk.length; send('stdout', { chunk: String(chunk) }); });
+  child.stderr.on('data', (chunk) => { send('stderr', { chunk: String(chunk) }); });
+
+  child.on('error', (err) => {
+    auditLog('run_command_stream', { command }, 'denied', err.message);
+    send('error', { error: err.message });
+    res.end();
+  });
+
+  child.on('close', (code, signal) => {
+    auditLog('run_command_stream', { command }, code === 0 ? 'success' : 'failed', 'exit ' + code);
+    send('done', { exitCode: code, signal: signal || null, bytes: outBytes });
+    res.end();
+  });
+
+  // אם הלקוח מתנתק, אין טעם להשאיר תהליך רץ
+  req.on('close', () => { try { child.kill(); } catch (e) {} });
+});
+
+app.post('/api/windows/plan', async (req, res) => {
+  const { plan, permissions = {} } = req.body || {};
+
+  async function runAction(action, params) {
+    return new Promise((resolve, reject) => {
+      let statusCode = 200;
+      const fakeRes = {
+        status(code) { statusCode = code; return this; },
+        json(body) {
+          if (statusCode >= 400 || !body || body.success === false) {
+            const e = new Error((body && body.error) || `שגיאה (${statusCode})`);
+            e.status = statusCode >= 400 ? statusCode : 500;
+            return reject(e);
+          }
+          resolve(body.data);
+        }
+      };
+      Promise.resolve(handleWindowsExecute({ body: { action, params, permissions } }, fakeRes))
+        .catch(reject);
+    });
+  }
+
+  try {
+    const result = await runPlan(plan, runAction);
+    auditLog('plan', { steps: plan.length }, 'success');
+    return res.json({ success: true, data: result });
+  } catch (err) {
+    auditLog('plan', { steps: Array.isArray(plan) ? plan.length : 0 }, 'denied', err.message);
+    return res.status(err.status || 500).json({
+      success: false,
+      error: err.message,
+      partial: err.partial || null
+    });
   }
 });
 

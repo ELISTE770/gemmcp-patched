@@ -8,7 +8,8 @@
     "dev": "nodemon server.js",
     "test": "node test/bridge.test.js",
     "test:sql": "node ../test/sql-gate.test.js",
-    "test:all": "node test/bridge.test.js && node ../test/sql-gate.test.js"
+    "test:all": "node test/bridge.test.js && node test/capabilities.test.js && node ../test/sql-gate.test.js",
+    "test:caps": "node test/capabilities.test.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",

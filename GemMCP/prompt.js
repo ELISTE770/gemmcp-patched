@@ -39,10 +39,10 @@ const OMNI_MCP_REGISTRY = {
     id: 'windows',
     name: 'Windows OS Tools (פקודות מערכת וקבצים)',
     icon: '🪟',
-    description: 'הפקת פקודות בפורמט JSON להרצה עצמאית במחשב: הפעלת תוכנות (קלוד, VS Code, מחשבון, כרום, ספוטיפיי, ווטסאפ, טלגרם, פנקס רשימות, וורד, אקסל), קריאה וכתיבת קבצים, סריקת תיקיות, הרצת פקודות PowerShell ולוח ההעתקה.',
+    description: 'הפקת פקודות בפורמט JSON להרצה עצמאית במחשב: הפעלת תוכנות (קלוד, VS Code, מחשבון, כרום, ספוטיפיי, ווטסאפ, טלגרם, פנקס רשימות, וורד, אקסל), קריאה וכתיבת קבצים, חיפוש לפי תבנית, יצירת תיקייה, העתקה, העברה ומחיקה לסל המיחזור, סריקת תיקיות, הרצת פקודות PowerShell ולוח ההעתקה. למשימה מרובת שלבים יש להשתמש בשדה plan.',
     userIntentMapping: 'כל בקשה לפתיחת תוכנה או אפליקציה (למשל: "פתח מחשבון", "תפתח את קלוד", "פתח VS Code"), קריאת/כתיבת קבצים, סריקת תיקיות, שימוש ב-Clipboard או פקודות מערכת - החזר ישירות פקודת JSON עבור שירות windows.',
     schema: {
-      action: 'open_app | read_file | write_file | list_directory | run_command | clipboard_read | clipboard_write',
+      action: 'open_app | read_file | write_file | list_directory | find_files | make_dir | copy_file | move_file | delete_file | run_command | clipboard_read | clipboard_write',
       app_name: 'claude | vscode | code | calc | notepad | chrome | spotify | whatsapp | telegram | word | excel | explorer',
       path: 'נתיב מלא לקובץ או תיקייה במחשב',
       content: 'תוכן טקסט לכתיבה לקובץ',
@@ -51,6 +51,9 @@ const OMNI_MCP_REGISTRY = {
     },
     examples: [
       '{"service": "windows", "action": "open_app", "app_name": "calc"}',
+      '{"service": "windows", "action": "find_files", "path": "~/Downloads", "pattern": "*.pdf", "limit": 50}',
+      '{"service": "windows", "action": "list_directory", "path": "~/Desktop", "offset": 0, "limit": 200}',
+      '{"service": "windows", "plan": [{"action": "find_files", "path": "~/Downloads", "pattern": "*.pdf", "as": "pdfs"}, {"action": "make_dir", "path": "~/Downloads/PDF"}, {"action": "move_file", "from": "$pdfs.items[0].path", "to": "~/Downloads/PDF"}]}',
       '{"service": "windows", "action": "open_app", "app_name": "claude"}',
       '{"service": "windows", "action": "read_file", "path": "C:\\\\Users\\\\path\\\\file.txt"}',
       '{"service": "windows", "action": "list_directory", "path": "C:\\\\Users\\\\path"}',

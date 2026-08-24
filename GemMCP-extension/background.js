@@ -520,12 +520,42 @@ async function handleOmniToolExecution(service, toolCall, config) {
  * כולל מנגנון Auto-Launch ו-Retry שקוף במקרה שהשרת כבוי
  */
 async function executeWindowsMcp(toolCall, config) {
-  const bridgeUrl = 'http://127.0.0.1:3000/api/windows/execute';
+  // תוכנית מרובת שלבים נשלחת ל-endpoint אחר, שמריץ את השלבים ברצף ומעביר
+  // ערכים ביניהם בצד השרת - במקום סבב שלם בצ'אט לכל שלב.
+  const isPlan = Array.isArray(toolCall.plan) && toolCall.plan.length > 0;
+  const bridgeUrl = isPlan
+    ? 'http://127.0.0.1:3000/api/windows/plan'
+    : 'http://127.0.0.1:3000/api/windows/execute';
   
   // חילוץ פעולה ופרמטרים
   let action = toolCall.action || toolCall.tool_name || 'read_file';
   if (action.startsWith('windows:')) {
     action = action.replace('windows:', '');
+  }
+
+  const permissionsBlock = {
+    readFiles: config?.winPermissions?.readFiles ?? true,
+    writeFiles: config?.winPermissions?.writeFiles ?? false,
+    runCommands: config?.winPermissions?.runCommands ?? false,
+    launchApps: config?.winPermissions?.launchApps ?? true,
+    clipboard: config?.winPermissions?.clipboard ?? true,
+    allowedPath: config?.winAllowedPath || null
+  };
+
+  if (isPlan) {
+    const planPayload = { plan: toolCall.plan, permissions: permissionsBlock };
+    const res = await fetch(bridgeUrl, {
+      method: 'POST',
+      headers: await buildBridgeHeaders(),
+      body: JSON.stringify(planPayload)
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      const err = new Error(data?.error || `שגיאת שרת מקומי (${res.status})`);
+      err.partial = data?.partial || null;
+      throw err;
+    }
+    return data.data;
   }
 
   const payload = {
