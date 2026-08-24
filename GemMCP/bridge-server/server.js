@@ -48,14 +48,10 @@ app.use(express.json());
 // ---------------------------------------------------------------------------
 // אימות
 //
-// במקור האימות היה אופציונלי ולמעשה בלתי שמיש: התוסף לא שלח את הכותרת
-// x-bridge-token, ולכן הפעלת BRIDGE_AUTH_TOKEN שברה אותו, וכל מי שהריץ בלעדיו
-// חשף endpoint להרצת PowerShell לכל תהליך מקומי.
-//
-// כאן הטוקן חובה. אם לא הוגדר ב-.env, השרת מגריל אחד בהפעלה וכותב אותו ל-.token
-// כדי שהמשתמש יעתיק אותו פעם אחת להגדרות התוסף.
+// במקור האימות היה בלתי שמיש: התוסף לא שלח את הכותרת x-bridge-token, ולכן
+// הפעלת BRIDGE_AUTH_TOKEN פשוט שברה אותו. עכשיו התוסף שולח אותה, והמנגנון
+// עובד - אך נשאר אופציונלי, מהסיבה שמוסברת ליד AUTH_TOKEN.
 // ---------------------------------------------------------------------------
-const TOKEN_FILE = path.join(__dirname, '.token');
 const PROTOCOL_VERSION = 1;
 
 // הטוקן הוא הגנה אופציונלית, ומופעל רק אם הוגדר במפורש ב-.env.
@@ -113,7 +109,7 @@ app.use((req, res, next) => {
   if (!ok) {
     return res.status(401).json({
       success: false,
-      error: 'אימות נכשל. העתק את הטוקן מ-bridge-server/.token להגדרות התוסף.'
+      error: 'אימות נכשל. ודא שהערך בשדה "טוקן אימות הגשר" בתוסף תואם ל-BRIDGE_AUTH_TOKEN ב-.env.'
     });
   }
 
@@ -1198,9 +1194,7 @@ const server = app.listen(PORT, HOST, () => {
   console.log(`🔒 נעול לגישה מקומית בלבד (Localhost / Extensions)`);
   console.log(`   פרוטוקול: ${PROTOCOL_VERSION}`);
   console.log(`--------------------------------------------------`);
-  console.log(`🔑 טוקן אימות (העתק להגדרות התוסף, פעם אחת):`);
-  console.log(`\n   ${AUTH_TOKEN}\n`);
-  console.log(`   נשמר גם ב: ${TOKEN_FILE}`);
+  console.log(`🔑 אימות טוקן : ${AUTH_REQUIRED ? 'נאכף' : 'כבוי (הגדר BRIDGE_AUTH_TOKEN ב-.env כדי להפעיל)'}`);
   console.log(`--------------------------------------------------`);
   console.log(`הרשאות פעילות בשרת:`);
   console.log(`   קריאת קבצים   : ${SERVER_CEILING.readFiles ? 'כן' : 'לא'}`);

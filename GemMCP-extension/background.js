@@ -20,9 +20,8 @@ const LOCAL_OAUTH_ENDPOINT = 'http://localhost:3000/api/oauth/exchange';
 // לא להתאים - עדיף להיכשל בקול מאשר בשקט.
 const BRIDGE_PROTOCOL_VERSION = 1;
 
-// טוקן האימות של הגשר. השרת מגריל אותו בהפעלה הראשונה וכותב ל-bridge-server/.token,
-// והמשתמש מדביק אותו פעם אחת בהגדרות התוסף. בלעדיו כל תהליך מקומי יכול להריץ
-// פקודות דרך הגשר.
+// טוקן האימות של הגשר. אופציונלי: נאכף רק אם הוגדר BRIDGE_AUTH_TOKEN ב-.env
+// של השרת. אם הוגדר, אותו ערך צריך להיות בשדה "טוקן אימות הגשר" בהגדרות התוסף.
 async function getBridgeToken() {
   // local ולא sync: זו סיסמה למכונה הזו בלבד. הקריאה מ-sync נשארת כגיבוי
   // עבור מי שכבר שמר טוקן לפני המעבר.
@@ -592,7 +591,7 @@ async function executeWindowsMcp(toolCall, config) {
       if (res.status === 401) {
         throw new Error(
           'הגשר דחה את הבקשה: טוקן אימות חסר או שגוי. ' +
-          'העתק את הטוקן מ-bridge-server/.token להגדרות התוסף.'
+          'ודא שהערך בשדה "טוקן אימות הגשר" תואם ל-BRIDGE_AUTH_TOKEN ב-.env של השרת.'
         );
       }
 
@@ -1169,7 +1168,7 @@ async function testServiceConnection(service, config) {
       if (data.authRequired && !data.authenticated) {
         throw new Error(
           'שרת ה-Bridge פועל אך הטוקן חסר או שגוי. ' +
-          'העתק את התוכן של bridge-server/.token לשדה "טוקן אימות הגשר" בהגדרות התוסף.'
+          'הגדר את אותו ערך של BRIDGE_AUTH_TOKEN בשדה "טוקן אימות הגשר" בהגדרות התוסף.'
         );
       }
 
