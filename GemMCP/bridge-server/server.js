@@ -4,6 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { exec, execFile } = require('child_process');
+const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
@@ -25,9 +26,16 @@ const HOST = '127.0.0.1'; // נעילת שרת ל-localhost בלבד למניע�
 const corsOptions = {
   origin: (origin, callback) => {
     // בקשות ללא origin (כגון curl, background service worker) או מתוספי Chrome ומ-localhost
-    if (!origin || origin.startsWith('chrome-extension://') || origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1')) {
-      return callback(null, true);
-    }
+    // startsWith על 'http://localhost' היה מתאים גם ל-http://localhost.evil.com,
+    // כלומר אתר ציבורי היה מקבל אישור CORS. נדרשת התאמה מדויקת של המארח.
+    if (!origin) return callback(null, true);          // curl / service worker
+    if (origin.startsWith('chrome-extension://')) return callback(null, true);
+    try {
+      const host = new URL(origin).hostname;
+      if (host === 'localhost' || host === '127.0.0.1' || host === '[::1]') {
+        return callback(null, true);
+      }
+    } catch (e) { /* origin לא תקין - ייפול לחסימה */ }
     return callback(new Error('גישה נחסמה מטעמי אבטחה (CORS Policy). הבקשה אינה מגיעה מתוסף מאושר.'));
   }
 };
@@ -35,49 +43,143 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 
-// אימות אופציונלי באמצעות Token משותף (אם הוגדר ב-.env)
-app.use((req, res, next) => {
-  const serverAuthToken = process.env.BRIDGE_AUTH_TOKEN;
-  if (serverAuthToken) {
-    const authHeader = req.headers['x-bridge-token'] || req.headers['authorization'];
-    const token = authHeader ? authHeader.replace(/^Bearer\s+/i, '') : null;
-    if (token !== serverAuthToken) {
-      return res.status(401).json({ success: false, error: 'אימות נכשל: BRIDGE_AUTH_TOKEN אינו תואם.' });
+// ---------------------------------------------------------------------------
+// אימות
+//
+// במקור האימות היה אופציונלי ולמעשה בלתי שמיש: התוסף לא שלח את הכותרת
+// x-bridge-token, ולכן הפעלת BRIDGE_AUTH_TOKEN שברה אותו, וכל מי שהריץ בלעדיו
+// חשף endpoint להרצת PowerShell לכל תהליך מקומי.
+//
+// כאן הטוקן חובה. אם לא הוגדר ב-.env, השרת מגריל אחד בהפעלה וכותב אותו ל-.token
+// כדי שהמשתמש יעתיק אותו פעם אחת להגדרות התוסף.
+// ---------------------------------------------------------------------------
+const TOKEN_FILE = path.join(__dirname, '.token');
+const PROTOCOL_VERSION = 1;
+
+// הטוקן הוא הגנה אופציונלית, ומופעל רק אם הוגדר במפורש ב-.env.
+//
+// למה לא חובה: ב-Windows ה-ACL של קובץ הטוקן פתוח לכל תהליך של אותו משתמש
+// (mode 0o600 של Node הוא no-op כאן), ולכן טוקן בקובץ אינו מונע מתהליך מקומי
+// זדוני להשתמש בגשר - הוא רק הוסיף שלב ידני למשתמש. מה שהוא כן חוסם הוא דף
+// אינטרנט, שאינו יכול לקרוא קבצים - וזה מכוסה ממילא בבדיקת ה-Origin ב-CORS.
+// מי שרוצה את השכבה הנוספת מגדיר BRIDGE_AUTH_TOKEN ב-.env, וזה נאכף במלואו.
+const AUTH_TOKEN = (process.env.BRIDGE_AUTH_TOKEN || '').trim();
+const AUTH_REQUIRED = AUTH_TOKEN.length > 0;
+
+// נתיבים שמותר לפנות אליהם בלי טוקן: בדיקת בריאות (כדי שהתוסף יוכל לזהות שהשרת
+// חי ולהציג הוראות), ודף ה-callback של OAuth שהדפדפן מגיע אליו בניווט רגיל.
+const OPEN_PATHS = new Set(['/api/health', '/oauth/callback']);
+
+// הגבלת קצב פשוטה: חלון מתגלגל לכל כתובת מקור. מונע לופ של מודל שמשתגע ומונע
+// מסקריפט מקומי להציף את ה-endpoint.
+const RATE_LIMIT_WINDOW_MS = 10000;
+const RATE_LIMIT_MAX = 40;
+const rateBuckets = new Map();
+
+function checkRateLimit(key) {
+  const now = Date.now();
+  const bucket = (rateBuckets.get(key) || []).filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
+  bucket.push(now);
+  rateBuckets.set(key, bucket);
+  if (rateBuckets.size > 256) {
+    for (const [k, v] of rateBuckets) {
+      if (!v.length || now - v[v.length - 1] > RATE_LIMIT_WINDOW_MS) rateBuckets.delete(k);
     }
   }
+  return bucket.length <= RATE_LIMIT_MAX;
+}
+
+app.use((req, res, next) => {
+  if (!checkRateLimit(req.ip || 'local')) {
+    return res.status(429).json({
+      success: false,
+      error: `יותר מ-${RATE_LIMIT_MAX} בקשות ב-${RATE_LIMIT_WINDOW_MS / 1000} שניות. נסה שוב בעוד רגע.`
+    });
+  }
+
+  if (!AUTH_REQUIRED) return next();
+  if (OPEN_PATHS.has(req.path)) return next();
+
+  const authHeader = req.headers['x-bridge-token'] || req.headers['authorization'];
+  const token = authHeader ? String(authHeader).replace(/^Bearer\s+/i, '').trim() : '';
+
+  // השוואה בזמן קבוע כדי לא לאפשר גזירת הטוקן לפי זמני תגובה
+  const a = Buffer.from(token);
+  const b = Buffer.from(AUTH_TOKEN);
+  const ok = a.length === b.length && crypto.timingSafeEqual(a, b);
+
+  if (!ok) {
+    return res.status(401).json({
+      success: false,
+      error: 'אימות נכשל. העתק את הטוקן מ-bridge-server/.token להגדרות התוסף.'
+    });
+  }
+
+  const clientProtocol = Number(req.headers['x-gemmcp-protocol'] || 0);
+  if (clientProtocol && clientProtocol !== PROTOCOL_VERSION) {
+    return res.status(409).json({
+      success: false,
+      error: `אי התאמת גרסאות: התוסף מדבר פרוטוקול ${clientProtocol} והשרת ${PROTOCOL_VERSION}. עדכן את שניהם מאותו מקור.`
+    });
+  }
+
   next();
 });
 
-// מנגנון סינון בטיחות משופר לשאילתות SQL
+// ---------------------------------------------------------------------------
+// סינון שאילתות SQL.
+//
+// במקור זו הייתה רשימת חסימה של תתי-מחרוזות. רשימת חסימה נכשלת בשני הכיוונים:
+// היא חוסמת שאילתות תמימות שבמקרה מכילות מילה מהרשימה (למשל עמודה בשם
+// user_grants), ומפספסת כל ניסוח שלא נמצא בה במדויק - הערות בתוך הפקודה,
+// רווחים כפולים, או שרשור.
+//
+// כאן ההיפך: כברירת מחדל מותרות רק שאילתות קריאה. כתיבה דורשת הצהרה מפורשת
+// ב-.env באמצעות SUPABASE_ALLOW_WRITES=true.
+// ---------------------------------------------------------------------------
+const SUPABASE_ALLOW_WRITES = process.env.SUPABASE_ALLOW_WRITES === 'true';
+
+const READ_ONLY_STATEMENTS = ['SELECT', 'WITH', 'SHOW', 'EXPLAIN', 'TABLE', 'VALUES'];
+const ALWAYS_BLOCKED = [
+  /\bDROP\s+(DATABASE|SCHEMA|ROLE|USER)\b/i,
+  /\bALTER\s+SYSTEM\b/i,
+  /\b(GRANT|REVOKE)\b/i,
+  /\b(CREATE|ALTER|DROP)\s+USER\b/i,
+  /\bAUTH\.USERS\b/i,
+  /\bPG_(SHADOW|AUTHID)\b/i
+];
+
 function sanitizeAndCheckQuery(query) {
-  if (!query || typeof query !== 'string') {
+  if (!query || typeof query !== 'string' || !query.trim()) {
     throw new Error('שאילתת SQL ריקה או לא תקינה');
   }
 
-  const upper = query.trim().toUpperCase();
+  // מסירים הערות כדי שלא ישמשו להסתרת פקודה
+  const stripped = query
+    .replace(/--[^\n]*/g, ' ')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .trim();
 
-  // חסימת פקודות הרסניות, שינויי הרשאות וגישה לטבלאות רגישות
-  const dangerousKeywords = [
-    'DROP DATABASE',
-    'DROP TABLE',
-    'DROP VIEW',
-    'DROP SCHEMA',
-    'TRUNCATE',
-    'ALTER SYSTEM',
-    'GRANT',
-    'REVOKE',
-    'CREATE USER',
-    'ALTER USER',
-    'DROP USER',
-    'AUTH.USERS',
-    'PG_SHADOW',
-    'PG_AUTHID'
-  ];
-
-  for (const kw of dangerousKeywords) {
-    if (upper.includes(kw)) {
-      throw new Error(`פעולה חסומה מטעמי בטיחות: שימוש ב-${kw} אינו מורשה.`);
+  for (const pattern of ALWAYS_BLOCKED) {
+    if (pattern.test(stripped)) {
+      throw new Error('פעולה חסומה מטעמי בטיחות: שינוי הרשאות או מחיקת סכימה אינם מורשים דרך הגשר.');
     }
+  }
+
+  const firstWord = (stripped.match(/^[A-Za-z]+/) || [''])[0].toUpperCase();
+  const isReadOnly = READ_ONLY_STATEMENTS.includes(firstWord);
+
+  if (!isReadOnly && !SUPABASE_ALLOW_WRITES) {
+    throw new Error(
+      `שאילתות כתיבה חסומות. הפקודה מתחילה ב-'${firstWord || '?'}'. ` +
+      'כדי לאפשר כתיבה, הגדר SUPABASE_ALLOW_WRITES=true בקובץ .env.'
+    );
+  }
+
+  // ריבוי פקודות בבקשה אחת מאפשר להסתיר פקודה שנייה אחרי פקודת קריאה
+  const withoutStrings = stripped.replace(/'([^']|'')*'/g, "''");
+  if (/;\s*\S/.test(withoutStrings)) {
+    throw new Error('אין לשלוח יותר מפקודת SQL אחת בבקשה.');
   }
 
   return query;
@@ -420,25 +522,123 @@ function expandPath(inputPath) {
     p = path.join(os.homedir(), p.slice(2));
   }
 
-  // הרחבת משתני סביבה בסגנון %VAR% (חיפוש לא תלוי רישיות)
+  // הרחבת %VAR% מוגבלת לרשימת היתר של משתני נתיב מוכרים.
+  // קודם הורחב כל משתנה סביבה, וב-process.env יושבים גם הסודות שנטענו מ-.env
+  // דרך dotenv - כלומר נתיב שהמודל מייצר יכול היה לגרור ערך סודי לתוך המחרוזת.
+  const SAFE_ENV_VARS = new Set([
+    'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA',
+    'TEMP', 'TMP', 'PUBLIC', 'PROGRAMDATA', 'PROGRAMFILES', 'PROGRAMFILES(X86)',
+    'SYSTEMROOT', 'WINDIR', 'SYSTEMDRIVE', 'ONEDRIVE'
+  ]);
   p = p.replace(/%([^%]+)%/g, (match, name) => {
-    const key = Object.keys(process.env).find(k => k.toLowerCase() === name.toLowerCase());
+    const upper = String(name).toUpperCase();
+    if (!SAFE_ENV_VARS.has(upper)) return match;   // לא מרחיבים - נשאר כטקסט
+    const key = Object.keys(process.env).find(k => k.toUpperCase() === upper);
     return key ? process.env[key] : match;
   });
 
   return p;
 }
 
-// קבלת הרשאות מהתוסף (req.body.permissions) עם ברירות מחדל וגיבוי של .env
+// פתרון קישורים סימבוליים ו-junctions לפני בדיקת התחום. בלי זה, קיצור דרך
+// שיושב בתוך התיקייה המותרת ומצביע החוצה מנהר את הגישה אל מחוץ לתחום.
+function canonicalise(p) {
+  try {
+    return fs.realpathSync.native(p);
+  } catch (e) {
+    // הנתיב אולי עוד לא קיים (כתיבת קובץ חדש) - מנרמלים את ההורה הקיים הקרוב
+    try {
+      const parent = path.dirname(p);
+      if (parent && parent !== p) return path.join(fs.realpathSync.native(parent), path.basename(p));
+    } catch (e2) { /* נופלים חזרה לנתיב המנורמל */ }
+    return path.resolve(p);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// פענוח הרשאות.
+//
+// במקור ההרשאות שהגיעו בגוף הבקשה *דרסו* את הגדרות ה-.env, כך שהלקוח יכול היה
+// להעניק לעצמו יותר ממה שהשרת התיר. אומת בפועל: בקשה עם allowedPath:"C:\" קראה
+// את C:\Windows\System32 למרות ש-WIN_ALLOWED_PATH הוגבל לשולחן העבודה.
+//
+// כאן ה-.env הוא תקרה. הלקוח יכול רק לצמצם, לעולם לא להרחיב.
+// ---------------------------------------------------------------------------
+const SERVER_CEILING = {
+  readFiles: process.env.WIN_PERM_READ !== 'false',
+  writeFiles: process.env.WIN_PERM_WRITE === 'true',
+  runCommands: process.env.WIN_PERM_COMMANDS === 'true',
+  launchApps: process.env.WIN_PERM_APPS !== 'false',
+  clipboard: process.env.WIN_PERM_CLIPBOARD !== 'false'
+};
+
+// נתיב ריק פירושו כעת "חסום", לא "כל הדיסק". פתיחת הדיסק כולו דורשת הצהרה
+// מפורשת: WIN_ALLOWED_PATH=* .
+const SERVER_ALLOWED_PATH = (() => {
+  const raw = (process.env.WIN_ALLOWED_PATH || '').trim();
+  if (raw === '*') return null;                       // ללא הגבלה, בבחירה מודעת
+  if (raw) return path.resolve(expandPath(raw));
+  return path.join(os.homedir(), 'Desktop');          // ברירת מחדל שמרנית
+})();
+
+// השוואת נתיבים חייבת לכבד גבול של מפריד תיקיות. startsWith גולמי הופך תיקייה
+// אחות בעלת אותה תחילית לחלק מהתחום המותר, ומאפשר לה לברוח ממנו.
+function isPathInside(child, parent) {
+  if (!parent) return true;                 // אין הגבלה
+  const rel = path.relative(parent, child);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
 function resolvePermissions(clientPerms = {}) {
+  // AND לוגי: הרשאה קיימת רק אם גם השרת וגם הלקוח מתירים אותה
+  const narrow = (ceiling, requested) =>
+    ceiling && (requested === undefined ? true : !!requested);
+
+  let allowedPath = SERVER_ALLOWED_PATH;
+  if (clientPerms.allowedPath) {
+    const requested = path.resolve(expandPath(clientPerms.allowedPath));
+    // מקבלים את בקשת הלקוח רק אם היא בתוך התקרה של השרת
+    if (isPathInside(requested, allowedPath)) {
+      allowedPath = requested;
+    }
+  }
+
   return {
-    readFiles: clientPerms.readFiles !== undefined ? !!clientPerms.readFiles : (process.env.WIN_PERM_READ !== 'false'),
-    writeFiles: clientPerms.writeFiles !== undefined ? !!clientPerms.writeFiles : (process.env.WIN_PERM_WRITE === 'true'),
-    runCommands: clientPerms.runCommands !== undefined ? !!clientPerms.runCommands : (process.env.WIN_PERM_COMMANDS === 'true'),
-    launchApps: clientPerms.launchApps !== undefined ? !!clientPerms.launchApps : (process.env.WIN_PERM_APPS !== 'false'),
-    clipboard: clientPerms.clipboard !== undefined ? !!clientPerms.clipboard : (process.env.WIN_PERM_CLIPBOARD !== 'false'),
-    allowedPath: (clientPerms.allowedPath ? path.resolve(expandPath(clientPerms.allowedPath)) : (process.env.WIN_ALLOWED_PATH ? path.resolve(expandPath(process.env.WIN_ALLOWED_PATH)) : null))
+    readFiles: narrow(SERVER_CEILING.readFiles, clientPerms.readFiles),
+    writeFiles: narrow(SERVER_CEILING.writeFiles, clientPerms.writeFiles),
+    runCommands: narrow(SERVER_CEILING.runCommands, clientPerms.runCommands),
+    launchApps: narrow(SERVER_CEILING.launchApps, clientPerms.launchApps),
+    clipboard: narrow(SERVER_CEILING.clipboard, clientPerms.clipboard),
+    allowedPath
   };
+}
+
+// ---------------------------------------------------------------------------
+// יומן ביקורת מתמשך. ה-Activity Log שבדף חי בלשונית אחת ונמחק ברענון, ולכן לא
+// נשאר שום תיעוד של מה בעצם הורץ על המחשב. כאן כל פעולה נרשמת לקובץ.
+// ---------------------------------------------------------------------------
+const AUDIT_FILE = path.join(__dirname, 'audit.log');
+
+function auditLog(action, params, outcome, detail) {
+  // לא כותבים תוכן קבצים או טקסט לוח שלם - רק מה שצריך כדי לשחזר מה קרה
+  const safeParams = {};
+  for (const [k, v] of Object.entries(params || {})) {
+    if (typeof v === 'string' && v.length > 200) {
+      safeParams[k] = `${v.slice(0, 200)}… (${v.length} chars)`;
+    } else {
+      safeParams[k] = v;
+    }
+  }
+  const line = JSON.stringify({
+    ts: new Date().toISOString(),
+    action,
+    params: safeParams,
+    outcome,
+    detail: detail ? String(detail).slice(0, 300) : undefined
+  });
+  fs.appendFile(AUDIT_FILE, line + '\n', (err) => {
+    if (err) console.warn('⚠️ כתיבה ליומן הביקורת נכשלה:', err.message);
+  });
 }
 
 // Endpoint מרכזי לביצוע פעולות Windows MCP
@@ -447,11 +647,23 @@ app.post('/api/windows/execute', async (req, res) => {
     const { action, params = {}, permissions = {} } = req.body;
     const perms = resolvePermissions(permissions);
 
+    // עוטפים את res כדי שכל תשובה תירשם ביומן בלי לפזר קריאות auditLog
+    const originalJson = res.json.bind(res);
+    let logged = false;
+    res.json = (body) => {
+      if (!logged) {
+        logged = true;
+        auditLog(action, params, body && body.success ? 'success' : 'denied', body && body.error);
+      }
+      return originalJson(body);
+    };
+
     // בדיקת נתיב מותר (Allowed Directory Scope)
     function validatePathInScope(targetPath) {
       if (!targetPath) return;
-      const resolved = path.resolve(expandPath(targetPath));
-      if (perms.allowedPath && !resolved.toLowerCase().startsWith(perms.allowedPath.toLowerCase())) {
+      const resolved = canonicalise(path.resolve(expandPath(targetPath)));
+      const ceiling = perms.allowedPath ? canonicalise(perms.allowedPath) : null;
+      if (ceiling && !isPathInside(resolved, ceiling)) {
         throw new Error(`הגישה לנתיב '${targetPath}' נחסמה. הנתיב המורשה בהגדרות השרת הוא: ${perms.allowedPath}`);
       }
       return resolved;
@@ -519,7 +731,12 @@ app.post('/api/windows/execute', async (req, res) => {
         checkDangerousWindowsCommands(params.command);
 
         const cwd = perms.allowedPath || process.cwd();
-        exec(params.command, { cwd, shell: 'powershell.exe', timeout: 30000, maxBuffer: 1024 * 1024 * 5 }, (error, stdout, stderr) => {
+        // execFile ולא exec: Node לא פותח shell שמפרסר את המחרוזת בעצמו.
+        // -NoProfile קריטי - בלעדיו PowerShell טוען את הפרופיל של המשתמש לפני
+        // כל פקודה, כך שכל מי שיכול לכתוב לקובץ הפרופיל מריץ קוד בכל קריאה.
+        execFile('powershell.exe',
+          ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', params.command],
+          { cwd, timeout: 30000, maxBuffer: 1024 * 1024 * 5 }, (error, stdout, stderr) => {
           if (error) {
             return res.json({
               success: false,
@@ -640,8 +857,21 @@ app.post('/api/windows/execute', async (req, res) => {
         const reportLaunched = () =>
           res.json({ success: true, data: { message: `היישום '${appTarget}' הופעל בהצלחה ב-Windows!` } });
 
+        // היעד מגיע בסופו של דבר מפלט של מודל, ולכן חייב לעבור אימות תווים לפני
+        // שהוא נוגע ב-cmd. תו כמו & או | היה הופך פתיחת תוכנה להרצת פקודה שרירותית.
+        const SAFE_EXE = /^[A-Za-z0-9._-]+$/;
+        const SAFE_URI = /^[A-Za-z][A-Za-z0-9.+-]*:[^"'`|&;<>^%\r\n]*$/;
+        if (!SAFE_EXE.test(targetToRun) && !SAFE_URI.test(targetToRun)) {
+          return res.status(400).json({
+            success: false,
+            error: `שם היישום '${appTarget}' מכיל תווים שאינם מורשים.`
+          });
+        }
+
         const launchTarget = () => {
-          exec(targetCommand, { windowsHide: false, timeout: LAUNCH_TIMEOUT_MS, killSignal: 'SIGKILL' }, (cmdErr) => {
+          // execFile ולא exec - הארגומנטים מועברים כמערך ואינם עוברים פירוש shell
+          execFile('cmd.exe', ['/c', 'start', '', targetToRun],
+            { windowsHide: false, timeout: LAUNCH_TIMEOUT_MS, killSignal: 'SIGKILL' }, (cmdErr) => {
             if (!cmdErr) {
               return reportLaunched();
             }
@@ -739,7 +969,34 @@ app.post('/api/windows/execute', async (req, res) => {
 
 // בדיקת תקינות שרת
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', bridge: 'GemMCP-Gemini-Bridge', platform: process.platform });
+  // נתיב פתוח בכוונה, ולכן אינו חושף את הטוקן עצמו - רק את מה שהתוסף צריך
+  // כדי להציג מצב נכון ולהנחות את המשתמש.
+  const authHeader = req.headers['x-bridge-token'] || req.headers['authorization'];
+  const token = authHeader ? String(authHeader).replace(/^Bearer\s+/i, '').trim() : '';
+  let authenticated = false;
+  if (token) {
+    const a = Buffer.from(token);
+    const b = Buffer.from(AUTH_TOKEN);
+    authenticated = a.length === b.length && crypto.timingSafeEqual(a, b);
+  }
+
+  res.json({
+    status: 'ok',
+    bridge: 'GemMCP-Gemini-Bridge',
+    platform: process.platform,
+    protocol: PROTOCOL_VERSION,
+    authRequired: AUTH_REQUIRED,
+    authenticated: AUTH_REQUIRED ? authenticated : true,
+    permissions: {
+      readFiles: SERVER_CEILING.readFiles,
+      writeFiles: SERVER_CEILING.writeFiles,
+      runCommands: SERVER_CEILING.runCommands,
+      launchApps: SERVER_CEILING.launchApps,
+      clipboard: SERVER_CEILING.clipboard,
+      allowedPath: SERVER_ALLOWED_PATH || '*'
+    },
+    supabaseWrites: SUPABASE_ALLOW_WRITES
+  });
 });
 
 // עדכון אוטומטי של התוסף ושרת ה-Bridge ישירות מ-GitHub
@@ -767,10 +1024,39 @@ app.post('/api/shutdown', (req, res) => {
 });
 
 // הפעלת השרת
+
+// מטפל שגיאות אחרון. בלעדיו שגיאת CORS או JSON פגום נופלות למטפל ברירת המחדל
+// של Express, שמחזיר דף HTML עם stack trace ובו נתיב ההתקנה ושם המשתמש - לפני
+// כל אימות.
+app.use((err, req, res, next) => {
+  const isJsonParse = err && err.type === 'entity.parse.failed';
+  const status = isJsonParse ? 400 : (err && err.status) || 500;
+  console.warn('⚠️ בקשה נדחתה:', err && err.message);
+  res.status(status).json({
+    success: false,
+    error: isJsonParse ? 'גוף הבקשה אינו JSON תקין.' : 'הבקשה נדחתה.'
+  });
+});
+
 const server = app.listen(PORT, HOST, () => {
   console.log(`\n==================================================`);
   console.log(`🚀 Windows Bridge Server רץ ומאזין בכתובת: http://${HOST}:${PORT}`);
   console.log(`🔒 נעול לגישה מקומית בלבד (Localhost / Extensions)`);
+  console.log(`   פרוטוקול: ${PROTOCOL_VERSION}`);
+  console.log(`--------------------------------------------------`);
+  console.log(`🔑 טוקן אימות (העתק להגדרות התוסף, פעם אחת):`);
+  console.log(`\n   ${AUTH_TOKEN}\n`);
+  console.log(`   נשמר גם ב: ${TOKEN_FILE}`);
+  console.log(`--------------------------------------------------`);
+  console.log(`הרשאות פעילות בשרת:`);
+  console.log(`   קריאת קבצים   : ${SERVER_CEILING.readFiles ? 'כן' : 'לא'}`);
+  console.log(`   כתיבת קבצים   : ${SERVER_CEILING.writeFiles ? 'כן' : 'לא'}`);
+  console.log(`   הרצת פקודות   : ${SERVER_CEILING.runCommands ? 'כן' : 'לא'}`);
+  console.log(`   פתיחת תוכנות  : ${SERVER_CEILING.launchApps ? 'כן' : 'לא'}`);
+  console.log(`   לוח העתקה     : ${SERVER_CEILING.clipboard ? 'כן' : 'לא'}`);
+  console.log(`   נתיב מותר     : ${SERVER_ALLOWED_PATH || 'כל הדיסק (WIN_ALLOWED_PATH=*)'}`);
+  console.log(`   כתיבה ל-SQL   : ${SUPABASE_ALLOW_WRITES ? 'כן' : 'לא'}`);
+  console.log(`   יומן ביקורת   : ${AUDIT_FILE}`);
   console.log(`==================================================\n`);
 });
 

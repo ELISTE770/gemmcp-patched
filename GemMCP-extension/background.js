@@ -16,9 +16,61 @@ const GITHUB_REDIRECT_URI = 'http://localhost:3000/oauth/callback';
 const CLOUD_OAUTH_ENDPOINT = 'https://iqakletdnmpsadznynnv.supabase.co/functions/v1/oauth-exchange';
 const LOCAL_OAUTH_ENDPOINT = 'http://localhost:3000/api/oauth/exchange';
 
+// גרסת הפרוטוקול בין התוסף לגשר. אם הגשר מדווח גרסה אחרת, הפורמטים עלולים
+// לא להתאים - עדיף להיכשל בקול מאשר בשקט.
+const BRIDGE_PROTOCOL_VERSION = 1;
+
+// טוקן האימות של הגשר. השרת מגריל אותו בהפעלה הראשונה וכותב ל-bridge-server/.token,
+// והמשתמש מדביק אותו פעם אחת בהגדרות התוסף. בלעדיו כל תהליך מקומי יכול להריץ
+// פקודות דרך הגשר.
+async function getBridgeToken() {
+  // local ולא sync: זו סיסמה למכונה הזו בלבד. הקריאה מ-sync נשארת כגיבוי
+  // עבור מי שכבר שמר טוקן לפני המעבר.
+  const local = await chrome.storage.local.get(['bridgeToken']);
+  if (local && typeof local.bridgeToken === 'string' && local.bridgeToken.trim()) {
+    return local.bridgeToken.trim();
+  }
+  const synced = await chrome.storage.sync.get(['bridgeToken']);
+  return typeof synced.bridgeToken === 'string' ? synced.bridgeToken.trim() : '';
+}
+
+async function buildBridgeHeaders(extra) {
+  const headers = Object.assign({ 'Content-Type': 'application/json' }, extra || {});
+  const token = await getBridgeToken();
+  if (token) headers['x-bridge-token'] = token;
+  headers['x-gemmcp-protocol'] = String(BRIDGE_PROTOCOL_VERSION);
+  return headers;
+}
+
+// החלפת קוד OAuth בטוקן.
+//
+// במקור נוסה קודם CLOUD_OAUTH_ENDPOINT - פונקציית Edge בפרויקט Supabase של מחבר
+// הפרויקט, לא של המשתמש. משמעות הדבר היא שקוד ההרשאה של חשבון ה-GitHub/Notion/
+// Supabase של המשתמש, והטוקן שחוזר, עברו דרך שרת של צד שלישי - למרות שהגשר
+// המקומי מממש את אותה החלפה בעצמו. כאן ההחלפה נעשית מקומית בלבד.
+//
+// מי שכן רוצה את מסלול הענן צריך להפעיל אותו במפורש בהגדרות התוסף.
 async function performOAuthExchange(service, code, redirectUri) {
-  // 1. ניסיון ענן מאובטח (Supabase Edge Function) - ללא צורך בהרצת שרת מקומי
-  try {
+  const { allowCloudOAuth } = await chrome.storage.sync.get(['allowCloudOAuth']);
+
+  const localRes = await fetch(LOCAL_OAUTH_ENDPOINT, {
+    method: 'POST',
+    headers: await buildBridgeHeaders(),
+    body: JSON.stringify({ service, code, redirectUri })
+  }).catch((e) => {
+    throw new Error(
+      `לא ניתן להגיע לשרת הגשר המקומי לביצוע החלפת ה-OAuth (${e.message}). ` +
+      'ודא ש-start-bridge.bat רץ.'
+    );
+  });
+
+  if (localRes.ok) return await localRes.json();
+
+  const err = await localRes.json().catch(() => ({}));
+
+  // מסלול ענן, רק בהסכמה מפורשת של המשתמש
+  if (allowCloudOAuth === true) {
+    console.warn('[GemMCP] Local OAuth exchange failed, user opted into the cloud endpoint.');
     const cloudRes = await fetch(CLOUD_OAUTH_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -28,23 +80,9 @@ async function performOAuthExchange(service, code, redirectUri) {
       const data = await cloudRes.json();
       if (data.success || data.accessToken) return data;
     }
-  } catch (e) {
-    console.warn('[GemMCP] Cloud OAuth endpoint unreachable, trying local bridge...', e);
   }
 
-  // 2. Fallback: שרת ה-Bridge המקומי (אם המשתמש מריץ שרת מקומי משלו)
-  const localRes = await fetch(LOCAL_OAUTH_ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ service, code, redirectUri })
-  });
-
-  if (!localRes.ok) {
-    const err = await localRes.json().catch(() => ({ error: 'OAuth exchange failed' }));
-    throw new Error(err.error || 'OAuth token exchange failed');
-  }
-
-  return await localRes.json();
+  throw new Error(err.error || 'החלפת ה-OAuth נכשלה בשרת המקומי.');
 }
 
 // ⚡ האזנה אוטומטית ל-Redirect של ה-OAuth (Supabase, Notion & GitHub)
@@ -253,6 +291,46 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  // מצב האימות מול הגשר. חייב לעבור דרך ה-service worker: content script פועל
+  // בהקשר הרשת של הדף, ומדיניות Local Network Access חוסמת ממנו גישה ל-localhost.
+  if (request.action === 'GET_BRIDGE_AUTH_STATE') {
+    (async () => {
+      try {
+        const res = await fetch('http://127.0.0.1:3000/api/health', {
+          headers: await buildBridgeHeaders()
+        });
+        const data = await res.json();
+        sendResponse({
+          success: true,
+          reachable: true,
+          authRequired: !!data.authRequired,
+          authenticated: !!data.authenticated
+        });
+      } catch (e) {
+        sendResponse({ success: true, reachable: false });
+      }
+    })();
+    return true;
+  }
+
+  // שמירת טוקן ואימותו מיד, כדי שהמשתמש יקבל תשובה ולא ינחש
+  if (request.action === 'SET_BRIDGE_TOKEN') {
+    (async () => {
+      const token = String(request.token || '').trim();
+      await chrome.storage.local.set({ bridgeToken: token });
+      try {
+        const res = await fetch('http://127.0.0.1:3000/api/health', {
+          headers: { 'x-bridge-token': token }
+        });
+        const data = await res.json();
+        sendResponse({ success: true, authenticated: !!data.authenticated });
+      } catch (e) {
+        sendResponse({ success: false, error: 'לא ניתן להגיע לגשר.' });
+      }
+    })();
+    return true;
+  }
+
   if (request.action === 'TEST_SERVICE_CONNECTION') {
     testServiceConnection(request.service, request.config)
       .then((res) => sendResponse({ success: true, message: res }))
@@ -316,7 +394,7 @@ async function shutdownBridgeServer() {
   try {
     const res = await fetch('http://127.0.0.1:3000/api/shutdown', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await buildBridgeHeaders(),
       signal: controller.signal
     });
     clearTimeout(timeoutId);
@@ -475,11 +553,19 @@ async function executeWindowsMcp(toolCall, config) {
     try {
       const res = await fetch(bridgeUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await buildBridgeHeaders(),
         body: JSON.stringify(payload),
         signal: controller.signal
       });
       clearTimeout(timeoutId);
+
+      if (res.status === 401) {
+        throw new Error(
+          'הגשר דחה את הבקשה: טוקן אימות חסר או שגוי. ' +
+          'העתק את הטוקן מ-bridge-server/.token להגדרות התוסף.'
+        );
+      }
+
       const data = await res.json();
       if (!res.ok || !data.success) {
         throw new Error(data?.error || `שגיאת שרת מקומי (${res.status})`);
@@ -544,6 +630,56 @@ async function executeWindowsMcp(toolCall, config) {
 /**
  * ⚡ ביצוע שאילתה ב-Supabase
  */
+// ---------------------------------------------------------------------------
+// שער בטיחות לשאילתות SQL שהמודל מייצר.
+//
+// כברירת מחדל מותרות רק שאילתות קריאה. כתיבה דורשת סימון מפורש בהגדרות התוסף
+// (supabaseAllowWrites). זו רשימת היתר ולא רשימת חסימה: רשימת חסימה מפספסת כל
+// ניסוח שלא נמצא בה, וגם חוסמת שאילתות תמימות שמכילות מילה מהרשימה.
+// ---------------------------------------------------------------------------
+const SQL_READ_ONLY_STARTS = ['SELECT', 'WITH', 'SHOW', 'EXPLAIN', 'TABLE', 'VALUES'];
+const SQL_ALWAYS_BLOCKED = [
+  /\bDROP\s+(DATABASE|SCHEMA|ROLE|USER|TABLE|VIEW|FUNCTION)\b/i,
+  /\bTRUNCATE\b/i,
+  /\bALTER\s+SYSTEM\b/i,
+  /\b(GRANT|REVOKE)\b/i,
+  /\b(CREATE|ALTER|DROP)\s+USER\b/i,
+  /\bAUTH\.USERS\b/i,
+  /\bPG_(SHADOW|AUTHID)\b/i,
+  /\bexec_sql\s*\(/i          // קריאה לפונקציה עצמה עוקפת את בדיקת מילת הפתיחה
+];
+
+function assertSafeSql(query, config) {
+  if (!query || !query.trim()) throw new Error('שאילתת SQL ריקה');
+
+  // מנטרלים מחרוזות ואז מסירים הערות, כך שהערה בתוך מחרוזת לא תבלבל את הניתוח
+  const neutralised = query
+    .replace(/'([^']|'')*'/g, "''")
+    .replace(/\$\$[\s\S]*?\$\$/g, "''")
+    .replace(/--[^\n]*/g, ' ')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ');
+
+  for (const pattern of SQL_ALWAYS_BLOCKED) {
+    if (pattern.test(neutralised)) {
+      throw new Error('השאילתה נחסמה: היא כוללת פעולה הרסנית או שינוי הרשאות.');
+    }
+  }
+
+  if (/;\s*\S/.test(neutralised)) {
+    throw new Error('אין לשלוח יותר מפקודת SQL אחת בבקשה.');
+  }
+
+  const first = (neutralised.trim().match(/^\(*\s*([A-Za-z]+)/) || [])[1] || '';
+  if (!SQL_READ_ONLY_STARTS.includes(first.toUpperCase()) && config?.supabaseAllowWrites !== true) {
+    throw new Error(
+      `שאילתות כתיבה חסומות (הפקודה מתחילה ב-'${first || '?'}'). ` +
+      'ניתן לאפשר כתיבה בהגדרות התוסף, בכרטיס Supabase.'
+    );
+  }
+
+  return query;
+}
+
 async function executeSupabase(toolCall, config) {
   let { supabaseUrl, supabaseKey } = config;
   if (!supabaseUrl || !supabaseKey) {
@@ -556,6 +692,10 @@ async function executeSupabase(toolCall, config) {
   if (!query && toolCall.action === 'list_tables') {
     query = "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name;";
   }
+
+  // הסינון חייב לקרות כאן. הבקשה הזו נשלחת ישירות מה-service worker ל-Supabase
+  // ואינה עוברת דרך שרת הגשר, ולכן הבדיקה שקיימת ב-server.js אינה חלה עליה כלל.
+  query = assertSafeSql(query, config);
 
   const endpoint = `${baseUrl}/rest/v1/rpc/exec_sql`;
   const response = await fetch(endpoint, {
@@ -985,12 +1125,36 @@ async function testServiceConnection(service, config) {
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 3500);
-      const res = await fetch('http://127.0.0.1:3000/api/health', { signal: controller.signal });
+      // שולחים את הטוקן גם בבדיקת הבריאות. /api/health פתוח, ולכן בלי זה
+      // המצב היה מוצג כ"מחובר" גם עם טוקן שגוי, והמשתמש היה מגלה את זה רק
+      // כשפקודה אמיתית נכשלת.
+      const res = await fetch('http://127.0.0.1:3000/api/health', {
+        headers: await buildBridgeHeaders(),
+        signal: controller.signal
+      });
       clearTimeout(timeoutId);
       if (!res.ok) throw new Error(`Bridge Server response status: ${res.status}`);
       const data = await res.json();
-      return `שרת Windows Bridge פועל תקין (פלטפורמה: ${data.platform || 'windows'})!`;
+
+      if (data.authRequired && !data.authenticated) {
+        throw new Error(
+          'שרת ה-Bridge פועל אך הטוקן חסר או שגוי. ' +
+          'העתק את התוכן של bridge-server/.token לשדה "טוקן אימות הגשר" בהגדרות התוסף.'
+        );
+      }
+
+      if (data.protocol && data.protocol !== BRIDGE_PROTOCOL_VERSION) {
+        throw new Error(
+          `אי התאמת גרסאות: השרת מדבר פרוטוקול ${data.protocol} והתוסף ${BRIDGE_PROTOCOL_VERSION}. ` +
+          'עדכן את שניהם מאותו מקור.'
+        );
+      }
+
+      const scope = data.permissions?.allowedPath === '*' ? 'כל הדיסק' : data.permissions?.allowedPath;
+      return `שרת Windows Bridge פועל ומאומת. נתיב מותר: ${scope || 'לא ידוע'}`;
     } catch (e) {
+      // שגיאות אימות וגרסה הן מפורשות - לא להחליף אותן בהודעה גנרית על Node חסר
+      if (e && /טוקן|פרוטוקול/.test(e.message || '')) throw e;
       throw new Error('שרת ה-Bridge כבוי או ש-Node.js חסר. ניתן להוריד מ-https://nodejs.org ולהריץ את start-bridge.bat');
     }
   }

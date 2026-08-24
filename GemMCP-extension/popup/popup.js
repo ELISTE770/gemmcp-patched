@@ -540,6 +540,14 @@ document.addEventListener('DOMContentLoaded', () => {
         customToolPrompts: customToolPrompts
       };
 
+      // הטוקן נשמר ב-local ולא ב-sync: הוא פרטי למכונה הזו, ו-sync היה משכפל
+      // אותו לשרתי גוגל ולכל פרופיל Chrome מחובר. נשמר רק אם השדה כבר נטען,
+      // אחרת שמירה אוטומטית מוקדמת הייתה מוחקת טוקן קיים.
+      const tokenEl = document.getElementById('bridgeToken');
+      if (tokenEl && tokenEl.dataset.loaded === '1') {
+        chrome.storage.local.set({ bridgeToken: (tokenEl.value || '').trim() });
+      }
+
       chrome.storage.sync.set(config, () => {
         updatePills(config);
       });
@@ -607,6 +615,139 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  // ---------------------------------------------------------------------
+  // טוקן אימות הגשר
+  //
+  // הגשר דורש טוקן לכל פעולה. הוא מגריל אותו בהפעלה הראשונה וכותב ל-.token,
+  // והמשתמש מדביק אותו כאן פעם אחת. /api/health פתוח בכוונה ומדווח אם הטוקן
+  // שנשלח תקף, כך שאפשר לתת חיווי מיידי במקום להשאיר את המשתמש לנחש.
+  // ---------------------------------------------------------------------
+  async function refreshBridgeTokenState() {
+    const badge = document.getElementById('bridge-token-state');
+    if (!badge) return;
+
+    const token = (document.getElementById('bridgeToken')?.value || '').trim();
+
+    const paint = (text, bg, color) => {
+      badge.textContent = text;
+      badge.style.background = bg;
+      badge.style.color = color;
+    };
+
+    if (!token) {
+      paint('לא הוגדר', 'rgba(220,38,38,.12)', '#b91c1c');
+      return;
+    }
+
+    try {
+      const res = await fetch('http://127.0.0.1:3000/api/health', {
+        headers: { 'x-bridge-token': token }
+      });
+      const data = await res.json();
+      if (data.authenticated) {
+        paint('תקף ✓', 'rgba(22,163,74,.14)', '#15803d');
+      } else {
+        paint('לא תואם', 'rgba(220,38,38,.12)', '#b91c1c');
+      }
+    } catch (e) {
+      paint('הגשר כבוי', 'rgba(100,116,139,.15)', '#475569');
+    }
+  }
+
+  (function wireBridgeToken() {
+    const tokenInput = document.getElementById('bridgeToken');
+    const showBox = document.getElementById('showBridgeToken');
+    const verifyBtn = document.getElementById('btn-verify-token');
+
+    if (showBox && tokenInput) {
+      showBox.addEventListener('change', () => {
+        tokenInput.type = showBox.checked ? 'text' : 'password';
+      });
+    }
+    if (verifyBtn) verifyBtn.addEventListener('click', () => {
+      refreshBridgeTokenState();
+      syncPermissionCeiling();
+    });
+    if (tokenInput) {
+      tokenInput.addEventListener('input', () => {
+        const badge = document.getElementById('bridge-token-state');
+        if (badge) badge.textContent = '';
+        debouncedAutoSave();
+      });
+      tokenInput.addEventListener('blur', refreshBridgeTokenState);
+    }
+  })();
+
+
+  // ---------------------------------------------------------------------
+  // סנכרון המתגים מול התקרה האמיתית של השרת.
+  //
+  // ה-.env של הגשר הוא תקרה: הלקוח יכול רק לצמצם. בלי הסנכרון הזה מתג שדלוק
+  // כאן אך כבוי בשרת פשוט לא יעבוד, בלי שום הסבר - הממשק היה מבטיח משהו
+  // שהשרת דוחה.
+  // ---------------------------------------------------------------------
+  async function syncPermissionCeiling() {
+    const map = [
+      ['readFiles',   winPermRead],
+      ['writeFiles',  winPermWrite],
+      ['runCommands', winPermCommand],
+      ['launchApps',  winPermApp],
+      ['clipboard',   winPermClipboard]
+    ];
+
+    const clear = (el) => {
+      if (!el) return;
+      el.disabled = false;
+      el.title = '';
+      const row = el.closest('label, .perm-row, .form-group') || el.parentElement;
+      if (row) { row.style.opacity = ''; row.querySelector('.ceiling-note')?.remove(); }
+    };
+
+    let health = null;
+    try {
+      const token = (document.getElementById('bridgeToken')?.value || '').trim();
+      const res = await fetch('http://127.0.0.1:3000/api/health', {
+        headers: token ? { 'x-bridge-token': token } : {}
+      });
+      health = await res.json();
+    } catch (e) {
+      map.forEach(([, el]) => clear(el));   // הגשר כבוי - לא נועלים כלום
+      return;
+    }
+
+    if (!health || !health.permissions) { map.forEach(([, el]) => clear(el)); return; }
+
+    for (const [key, el] of map) {
+      if (!el) continue;
+      const allowedByServer = health.permissions[key] !== false;
+      clear(el);
+      if (allowedByServer) continue;
+
+      el.checked = false;
+      el.disabled = true;
+      el.title = 'חסום בהגדרות השרת (.env). ניתן להפעיל רק שם.';
+      const row = el.closest('label, .perm-row, .form-group') || el.parentElement;
+      if (row) {
+        row.style.opacity = '0.55';
+        if (!row.querySelector('.ceiling-note')) {
+          const note = document.createElement('span');
+          note.className = 'ceiling-note';
+          note.textContent = ' חסום ב-.env';
+          note.style.cssText = 'font-size:10px; font-weight:700; color:#b91c1c; margin-inline-start:6px;';
+          row.appendChild(note);
+        }
+      }
+    }
+
+    const pathEl = document.getElementById('winAllowedPath');
+    if (pathEl) {
+      const scope = health.permissions.allowedPath;
+      pathEl.placeholder = scope === '*'
+        ? 'השרת מתיר את כל הדיסק'
+        : `תקרת השרת: ${scope}`;
+    }
+  }
+
   // טעינה ראשונית של כל ההגדרות מהאחסון
   function loadAllStoredSettings() {
     chrome.storage.sync.get(null, (data) => {
@@ -617,6 +758,16 @@ document.addEventListener('DOMContentLoaded', () => {
       if (notionApiKeyInput && data.notionApiKey) notionApiKeyInput.value = data.notionApiKey;
       if (githubTokenInput && data.githubToken) githubTokenInput.value = data.githubToken;
       if (winAllowedPathInput && data.winAllowedPath) winAllowedPathInput.value = data.winAllowedPath;
+
+      const tokenInput = document.getElementById('bridgeToken');
+      if (tokenInput) {
+        chrome.storage.local.get(['bridgeToken'], (loc) => {
+          if (loc && typeof loc.bridgeToken === 'string') tokenInput.value = loc.bridgeToken;
+          tokenInput.dataset.loaded = '1';
+          refreshBridgeTokenState();
+          syncPermissionCeiling();
+        });
+      }
 
       if (data.winPermissions) {
         if (winPermRead) winPermRead.checked = data.winPermissions.readFiles !== false;

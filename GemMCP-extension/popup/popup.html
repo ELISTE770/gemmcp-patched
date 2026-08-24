@@ -175,6 +175,27 @@
           </div>
         </div>
 
+        <!-- טוקן אימות הגשר -->
+        <div class="form-group" style="margin-top:12px;">
+          <label for="bridgeToken" style="display:flex; align-items:center; gap:6px;">
+            <span data-i18n="bridgeTokenLabel">טוקן אימות הגשר</span>
+            <span id="bridge-token-state" style="font-size:10.5px; font-weight:700; padding:2px 7px; border-radius:6px;"></span>
+          </label>
+          <input type="password" id="bridgeToken" dir="ltr" autocomplete="off" spellcheck="false"
+                 placeholder="הדבק כאן את התוכן של bridge-server/.token">
+          <div style="display:flex; gap:8px; align-items:center; margin-top:6px;">
+            <button type="button" class="btn btn-outline" id="btn-verify-token"
+                    style="margin-top:0; padding:5px 10px; font-size:11px;">בדוק טוקן</button>
+            <label style="display:flex; align-items:center; gap:5px; font-size:11px; color:var(--text-muted); cursor:pointer;">
+              <input type="checkbox" id="showBridgeToken"> הצג
+            </label>
+          </div>
+          <small style="display:block; margin-top:6px; line-height:1.5; color:var(--text-muted);">
+            השרת מגריל טוקן בהפעלה הראשונה, מדפיס אותו לחלון וכותב אותו ל-<code dir="ltr">bridge-server/.token</code>.
+            בלעדיו כל תהליך אחר במחשב יכול להריץ פקודות דרך הגשר.
+          </small>
+        </div>
+
         <div class="actions-group">
           <div style="display: flex; gap: 8px; align-items: center; width: 100%;">
             <button class="btn btn-outline" id="testWindowsBtn" data-i18n="winTestBtn" style="flex: 1; margin-top: 0;">בדוק חיבור ל-Windows Bridge</button>

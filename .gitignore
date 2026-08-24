@@ -9,6 +9,10 @@ package-lock.json
 *.env
 !.env.example
 
+# Bridge auth token (generated at first run) and the local audit trail
+.token
+audit.log
+
 # Logs
 *.log
 npm-debug.log*

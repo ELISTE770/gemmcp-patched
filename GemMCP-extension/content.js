@@ -929,14 +929,31 @@
   // isGeminiGenerating מחזירה true לנצח והסריקה נחסמת לחלוטין.
   function isElementVisible(el) {
     if (!el) return false;
+    // getClientRects הוא חישוב layout אחד שכבר מכסה display:none, ניתוק מה-DOM
+    // ואלמנט בגודל אפס. רק אם הוא עבר שווה לשלם על getComputedStyle, שהוא
+    // הקריאה היקרה, כדי לתפוס visibility ו-opacity.
+    if (el.getClientRects().length === 0) return false;
     const style = getComputedStyle(el);
-    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
-    if (el.offsetParent === null && style.position !== 'fixed') return false;
-    const rect = el.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0;
+    return style.visibility !== 'hidden' && style.opacity !== '0';
   }
 
+  // isGeminiGenerating נקראת בתדירות גבוהה: מכל מחזור של attemptSend (כל שנייה),
+  // ומכל סריקה שה-MutationObserver מפעיל. כל בדיקת נראות כופה חישוב layout מחדש,
+  // ובדף כבד כמו ג'מיני קריאה חוזרת כזו הופכת ל-layout thrashing שמקפיא את הטאב.
+  // לכן התוצאה נשמרת לחלון קצר - קצר מספיק כדי להישאר מדויק, ארוך מספיק כדי
+  // שהחישוב לא יקרה עשרות פעמים בשנייה.
+  let generatingCache = { value: false, at: 0 };
+  const GENERATING_CACHE_MS = 250;
+
   function isGeminiGenerating() {
+    const now = Date.now();
+    if (now - generatingCache.at < GENERATING_CACHE_MS) return generatingCache.value;
+    const value = computeGeminiGenerating();
+    generatingCache = { value, at: now };
+    return value;
+  }
+
+  function computeGeminiGenerating() {
     // בודק אם יש כפתור Stop פעיל או אינדיקטור טעינה המעיד על כך שג'מיני עדיין מייצר תגובה
     const stopSelectors = [
       'button[aria-label*="Stop" i]',
@@ -1043,8 +1060,14 @@
         continue;
       }
 
-      const text = el.innerText || el.textContent || '';
-      
+      // innerText כופה חישוב layout, וכאן זה קורה לכל אלמנט מועמד בכל סריקה.
+      // textContent לא כופה layout, ולכן משמש כמסנן מקדים זול: רק אלמנט שנראה
+      // כמו מועמד אמיתי משלם על innerText.
+      const cheap = el.textContent || '';
+      if (!cheap.includes('{')) continue;
+
+      const text = el.innerText || cheap;
+
       if (text.includes('{') && (text.includes('"action"') || text.includes('"service"') || text.includes('"app_name"') || text.includes('"command"') || text.includes('"path"') || text.includes('execute_sql') || text.includes('"query"'))) {
         const toolCall = parseToolCall(text);
         if (toolCall) {
@@ -1218,10 +1241,73 @@
     const autoRun = autoToggle ? autoToggle.checked : isAutoExecute;
     addLog(`זוהתה בקשה מ-Gemini עבור [${service}]: ${toolCall.action || toolCall.tool_name || 'execute'}`);
 
+    // פעולות בלתי הפיכות או בעלות טווח בלתי מוגבל דורשות אישור *תמיד*, גם כאשר
+    // ההרצה האוטומטית דלוקה. הרצת PowerShell או כתיבה לקובץ הן לא משהו שכדאי
+    // שיקרה בלי שהמשתמש ראה את זה, ומתג נוחות אחד לא צריך לבטל את זה.
+    if (autoRun && requiresExplicitApproval(service, toolCall)) {
+      addLog(`הפעולה [${toolCall.action}] דורשת אישור גם במצב הרצה אוטומטית`);
+      promptUserApproval(service, toolCall);
+      return;
+    }
+
     if (autoRun) {
       executeTool(service, toolCall);
     } else {
       promptUserApproval(service, toolCall);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // סיווג סיכון של פעולה. משמש גם לשער האישור הכפוי וגם לצביעת כרטיס האישור.
+  // ---------------------------------------------------------------------------
+  const ACTION_RISK = {
+    run_command:     { level: 'danger',  label: 'הרצת פקודה במערכת', icon: '⚡' },
+    write_file:      { level: 'danger',  label: 'כתיבה לקובץ',        icon: '✏️' },
+    create_repo:     { level: 'warn',    label: 'יצירת מאגר',         icon: '📦' },
+    create_page:     { level: 'warn',    label: 'יצירת דף',           icon: '📝' },
+    create_issue:    { level: 'warn',    label: 'פתיחת issue',        icon: '🐛' },
+    execute_sql:     { level: 'warn',    label: 'שאילתת SQL',         icon: '🗄️' },
+    clipboard_write: { level: 'warn',    label: 'כתיבה ללוח',         icon: '📋' },
+    open_app:        { level: 'safe',    label: 'פתיחת תוכנה',        icon: '🚀' },
+    read_file:       { level: 'safe',    label: 'קריאת קובץ',         icon: '📄' },
+    list_directory:  { level: 'safe',    label: 'סריקת תיקייה',       icon: '📂' },
+    clipboard_read:  { level: 'safe',    label: 'קריאת הלוח',         icon: '📋' },
+    get_url:         { level: 'safe',    label: 'משיכת דף אינטרנט',   icon: '🌐' },
+    list_tables:     { level: 'safe',    label: 'רשימת טבלאות',       icon: '🗄️' },
+    get_schema:      { level: 'safe',    label: 'סכימת מסד נתונים',   icon: '🗄️' },
+    list_repos:      { level: 'safe',    label: 'רשימת מאגרים',       icon: '📦' },
+    get_file:        { level: 'safe',    label: 'קריאת קובץ מ-GitHub', icon: '📄' },
+    get_page:        { level: 'safe',    label: 'קריאת דף',           icon: '📝' },
+    search:          { level: 'safe',    label: 'חיפוש',              icon: '🔍' }
+  };
+
+  function classifyAction(toolCall) {
+    const action = String(toolCall.action || toolCall.tool_name || '').replace(/^[a-z]+:/, '');
+    return ACTION_RISK[action] || { level: 'warn', label: action || 'פעולה', icon: '❓' };
+  }
+
+  function requiresExplicitApproval(service, toolCall) {
+    return classifyAction(toolCall).level === 'danger';
+  }
+
+  // תיאור הפעולה בשפה אנושית, כדי שלא יהיה צריך לקרוא JSON כדי להחליט
+  function describeAction(service, toolCall) {
+    const t = (v) => (v === undefined || v === null ? '' : String(v));
+    const action = String(toolCall.action || toolCall.tool_name || '').replace(/^[a-z]+:/, '');
+    switch (action) {
+      case 'open_app':        return `לפתוח את התוכנה "${t(toolCall.app_name)}"`;
+      case 'read_file':       return `לקרוא את הקובץ ${t(toolCall.path)}`;
+      case 'list_directory':  return `לסרוק את התיקייה ${t(toolCall.path)}`;
+      case 'write_file':      return `לכתוב ${t(toolCall.content).length} תווים לקובץ ${t(toolCall.path)}`;
+      case 'run_command':     return `להריץ ב-PowerShell: ${t(toolCall.command)}`;
+      case 'clipboard_read':  return 'לקרוא את תוכן לוח ההעתקה';
+      case 'clipboard_write': return `להעתיק ללוח: "${t(toolCall.text).slice(0, 80)}"`;
+      case 'get_url':         return `למשוך את הכתובת ${t(toolCall.url)}`;
+      case 'execute_sql':     return `להריץ שאילתה: ${t(toolCall.query).slice(0, 120)}`;
+      case 'create_page':     return `ליצור דף בשם "${t(toolCall.title)}"`;
+      case 'create_repo':     return `ליצור מאגר בשם "${t(toolCall.name)}"`;
+      case 'create_issue':    return `לפתוח issue "${t(toolCall.title)}" ב-${t(toolCall.repo)}`;
+      default:                return `להריץ ${action} בשירות ${service}`;
     }
   }
 
@@ -1236,12 +1322,73 @@
         <span>בקשת פעולה מג'מיני</span>
         <span style="color:#60a5fa;">[${service}] ${toolCall.action || ''}</span>
       </div>
-      <div class="omni-mcp-sql-preview">${escapeHtml(JSON.stringify(toolCall, null, 2))}</div>
-      <div class="omni-mcp-btn-group">
-        <button class="omni-mcp-btn-approve">אשר והרץ</button>
-        <button class="omni-mcp-btn-reject">בטל</button>
-      </div>
     `;
+
+    const risk = classifyAction(toolCall);
+    const RISK_STYLE = {
+      safe:   { border: '#2563a8', bg: 'rgba(37,99,168,.12)',  text: '#93c5fd', word: 'קריאה' },
+      warn:   { border: '#b45309', bg: 'rgba(180,83,9,.14)',   text: '#fcd34d', word: 'שינוי' },
+      danger: { border: '#b91c1c', bg: 'rgba(185,28,28,.16)',  text: '#fca5a5', word: 'מסוכן' }
+    };
+    const style = RISK_STYLE[risk.level] || RISK_STYLE.warn;
+    card.style.borderInlineStartWidth = '4px';
+    card.style.borderInlineStartStyle = 'solid';
+    card.style.borderInlineStartColor = style.border;
+
+    // שורת סיווג + תיאור אנושי
+    const summary = document.createElement('div');
+    summary.style.cssText = 'display:flex; align-items:center; gap:7px; flex-wrap:wrap; margin:7px 0 4px;';
+    summary.innerHTML = `
+      <span style="background:${style.bg}; color:${style.text}; border:1px solid ${style.border};
+                   font-size:10px; font-weight:700; padding:2px 7px; border-radius:6px;">
+        ${risk.icon} ${escapeHtml(style.word)}
+      </span>
+      <span style="font-size:12px; color:#e2e8f0; font-weight:600;">${escapeHtml(risk.label)}</span>
+    `;
+    card.appendChild(summary);
+
+    const human = document.createElement('div');
+    human.style.cssText = 'font-size:12.5px; line-height:1.55; color:#cbd5e1; margin:2px 0 8px; word-break:break-word;';
+    human.textContent = describeAction(service, toolCall);
+    card.appendChild(human);
+
+    // תצוגה מקדימה של התוכן שעומד להיכתב, במקום רק שם הקובץ
+    const action = String(toolCall.action || '').replace(/^[a-z]+:/, '');
+    if (action === 'write_file' && typeof toolCall.content === 'string') {
+      const preview = document.createElement('details');
+      preview.style.cssText = 'margin-bottom:8px;';
+      const body = toolCall.content.length > 1200
+        ? toolCall.content.slice(0, 1200) + `\n… (עוד ${toolCall.content.length - 1200} תווים)`
+        : toolCall.content;
+      preview.innerHTML = `
+        <summary style="cursor:pointer; font-size:11.5px; color:#93c5fd; font-weight:600;">
+          תצוגה מקדימה של התוכן (${toolCall.content.length} תווים)
+        </summary>
+        <div class="omni-mcp-sql-preview" style="margin-top:6px; max-height:190px; overflow:auto;">${escapeHtml(body)}</div>
+      `;
+      card.appendChild(preview);
+    }
+
+    // ה-JSON המלא נשאר זמין, אבל מקופל - הוא לא מה שמכריע את ההחלטה
+    const raw = document.createElement('details');
+    raw.style.cssText = 'margin-bottom:9px;';
+    raw.innerHTML = `
+      <summary style="cursor:pointer; font-size:11px; color:#94a3b8;">הצג JSON מלא</summary>
+      <div class="omni-mcp-sql-preview" style="margin-top:6px;">${escapeHtml(JSON.stringify(toolCall, null, 2))}</div>
+    `;
+    card.appendChild(raw);
+
+    const btns = document.createElement('div');
+    btns.className = 'omni-mcp-btn-group';
+    btns.innerHTML = `
+      <button class="omni-mcp-btn-approve">אשר והרץ <span style="opacity:.65; font-size:10px;">Enter</span></button>
+      <button class="omni-mcp-btn-reject">בטל <span style="opacity:.65; font-size:10px;">Esc</span></button>
+    `;
+    card.appendChild(btns);
+
+    const hint = document.createElement('div');
+    hint.style.cssText = 'font-size:10.5px; color:#64748b; margin-top:6px;';
+    card.appendChild(hint);
 
     const approveBtn = card.querySelector('.omni-mcp-btn-approve');
     const rejectBtn = card.querySelector('.omni-mcp-btn-reject');
@@ -1251,21 +1398,81 @@
       if (!container.querySelector('.omni-mcp-query-card')) closePanel();
     }
 
-    approveBtn.addEventListener('click', () => {
-      card.remove();
-      closeIfNoPendingCards();
-      executeTool(service, toolCall);
-    });
+    // כרטיס שנשכח על המסך הוא כרטיס שיאושר בהיסח הדעת מתישהו. פעולות מסוכנות
+    // מתבטלות מעצמן אם לא הוכרעו, ופעולות קריאה מקבלות חלון ארוך יותר.
+    const TIMEOUT_MS = risk.level === 'danger' ? 45000 : 120000;
+    let remaining = Math.round(TIMEOUT_MS / 1000);
+    let settled = false;
 
-    rejectBtn.addEventListener('click', () => {
+    const tick = setInterval(() => {
+      remaining -= 1;
+      if (remaining <= 0) {
+        reject('הפעולה בוטלה אוטומטית: לא התקבל אישור בזמן.');
+      } else {
+        hint.textContent = `יתבטל אוטומטית בעוד ${remaining} שניות`;
+      }
+    }, 1000);
+    hint.textContent = `יתבטל אוטומטית בעוד ${remaining} שניות`;
+
+    function cleanup() {
+      settled = true;
+      clearInterval(tick);
+      document.removeEventListener('keydown', onKey, true);
       card.remove();
-      sendResponseToGemini(service, { error: "הפעולה בוטלה על ידי המשתמש." });
-      addLog('הפעולה בוטלה ע"י המשתמש', { error: false });
       closeIfNoPendingCards();
-    });
+    }
+
+    function approve() {
+      if (settled) return;
+      cleanup();
+      executeTool(service, toolCall);
+    }
+
+    function reject(reason) {
+      if (settled) return;
+      cleanup();
+      sendResponseToGemini(service, { error: reason || 'הפעולה בוטלה על ידי המשתמש.' });
+      addLog(reason || 'הפעולה בוטלה ע"י המשתמש', { error: false });
+    }
+
+    // קיצורי מקלדת.
+    //
+    // המאזין רשום ברמת המסמך, ולכן אם פתוחים כמה כרטיסים לחיצה אחת על Enter
+    // הייתה מפעילה את כולם. לכן הוא פועל רק על הכרטיס הראשון בתור, וגם רק
+    // כשאין פוקוס בשדה טקסט - אחרת היה חוטף Enter מהקלדה רגילה בקומפוזר.
+    function isFrontCard() {
+      return container.querySelector('.omni-mcp-query-card') === card;
+    }
+
+    function onKey(e) {
+      if (settled || !isFrontCard()) return;
+
+      const el = document.activeElement;
+      const inField = el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
+      if (inField) return;
+
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        approve();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        reject();
+      }
+    }
+    document.addEventListener('keydown', onKey, true);
+
+    approveBtn.addEventListener('click', approve);
+    rejectBtn.addEventListener('click', () => reject());
 
     container.appendChild(card);
     openPanel();
+
+    // לא נותנים פוקוס לכפתור האישור: זה גם גוזל פוקוס מהקומפוזר של ג'מיני באמצע
+    // הקלדה, וגם הופך רווח לאישור של פעולה שעלולה להיות הרסנית.
   }
 
   function executeTool(service, toolCall) {
