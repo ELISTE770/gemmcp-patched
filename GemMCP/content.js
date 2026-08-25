@@ -196,8 +196,8 @@
             <input type="checkbox" id="omni-mcp-auto-toggle" ${isAutoExecute ? 'checked' : ''} style="cursor: pointer; transform: scale(1.2);">
           </div>
 
-          <div id="omni-mcp-autorun-warning" ${isAutoExecute ? '' : 'hidden'}
-               style="display:flex; gap:6px; align-items:flex-start; margin:2px 0 8px; padding:7px 9px;
+          <div id="omni-mcp-autorun-warning"
+               style="display:${isAutoExecute ? 'flex' : 'none'}; gap:6px; align-items:flex-start; margin:2px 0 8px; padding:7px 9px;
                       border:1px solid #b45309; background:rgba(180,83,9,.14); border-radius:7px;
                       font-size:11px; line-height:1.5; color:#fcd34d;">
             <span>⚠️</span>
@@ -635,13 +635,22 @@
   const LOG_STORE_KEY = 'activityLog';
   const LOG_STORE_MAX = 300;
 
-  async function persistLog(entry) {
-    try {
-      const store = await chrome.storage.local.get([LOG_STORE_KEY]);
-      const list = Array.isArray(store[LOG_STORE_KEY]) ? store[LOG_STORE_KEY] : [];
-      list.push(entry);
-      await chrome.storage.local.set({ [LOG_STORE_KEY]: list.slice(-LOG_STORE_MAX) });
-    } catch (e) { /* יומן שנכשל לעולם לא יפיל פעולה אמיתית */ }
+  // שתי כתיבות באותו tick קראו את אותה רשימה ואז שתיהן כתבו, כך שהשנייה
+  // דרסה את הראשונה. אומת: מתוך ארבע רשומות רצופות שרדו שתיים בלבד.
+  // שרשור ההבטחות הופך כל כתיבה לקריאה-ואז-כתיבה אטומית.
+  let logChain = Promise.resolve();
+
+  function persistLog(entry) {
+    const run = async () => {
+      try {
+        const store = await chrome.storage.local.get([LOG_STORE_KEY]);
+        const list = Array.isArray(store[LOG_STORE_KEY]) ? store[LOG_STORE_KEY] : [];
+        list.push(entry);
+        await chrome.storage.local.set({ [LOG_STORE_KEY]: list.slice(-LOG_STORE_MAX) });
+      } catch (e) { /* יומן שנכשל לעולם לא יפיל פעולה אמיתית */ }
+    };
+    logChain = logChain.then(run, run);
+    return logChain;
   }
 
   async function loadPersistedLog() {
@@ -700,7 +709,9 @@
   // צריכה להיות גלויה כל עוד היא דלוקה - לא רק מתג קטן שאפשר לשכוח שנגעת בו.
   function syncAutoRunWarning() {
     const el = document.getElementById('omni-mcp-autorun-warning');
-    if (el) el.hidden = !isAutoExecute;
+    // משנים display ולא את התכונה hidden: כלל display בסגנון מוטבע גובר על
+    // [hidden] של הדפדפן, ואז האזהרה נראתה גם כשההרצה האוטומטית כבויה.
+    if (el) el.style.display = isAutoExecute ? 'flex' : 'none';
   }
 
   function wireLogControls() {
