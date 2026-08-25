@@ -795,6 +795,26 @@
       return;
     }
 
+    // הפעלה דורסת את תיבת הקלט. אם המשתמש כבר הקליד משהו, הטקסט שלו נשזר
+    // לתוך הפרומפט ונשלח יחד איתו - ראיתי את זה קורה. שואלים לפני שדורסים.
+    const existing = (inputField.innerText || inputField.textContent || '').trim();
+    const alreadyActivated = existing.includes('CRITICAL INSTRUCTIONS');
+    if (existing && !alreadyActivated) {
+      const NL = String.fromCharCode(10);
+      const preview = existing.slice(0, 120) + (existing.length > 120 ? '…' : '');
+      const ok = confirm([
+        'בתיבת ההודעה כבר יש טקסט, וההפעלה תדרוס אותו:',
+        '',
+        '"' + preview + '"',
+        '',
+        'להמשיך?'
+      ].join(NL));
+      if (!ok) {
+        addLog('ההפעלה בוטלה - יש טקסט בתיבת ההודעה.');
+        return;
+      }
+    }
+
     if (activeServices.includes('windows')) {
       ensureWindowsBridgeRunning();
     }
@@ -904,6 +924,9 @@
     injectText();
 
     let attempts = 0;
+    // האם כבר ניסינו לשלוח. בלי זה, פעימה שרואה תיבה ריקה אחרי שליחה מוצלחת
+    // מפרשת את ההצלחה ככישלון ומזריקה את כל הפרומפט מחדש.
+    let sendAttempted = false;
     const maxAttempts = 90; // נבדוק עד כדקה וחצי (90 שניות)
     let hasLoggedWaiting = false;
     let generatingWaits = 0;
@@ -941,7 +964,20 @@
       if (actualTarget) {
         target = actualTarget;
         const currentText = target.innerText || target.textContent || '';
-        if (!currentText.trim() || currentText.trim().length < 5) {
+        const looksEmpty = !currentText.trim() || currentText.trim().length < 5;
+
+        // תיבה ריקה אחרי שכבר שלחנו פירושה שהשליחה הצליחה, לא שהטקסט אבד.
+        // קודם הפעימה הבאה הזריקה כאן את הפרומפט מחדש, ואז שלחה אותו שוב -
+        // כך שההפעלה נכנסה פעמיים, וטקסט שהמשתמש הספיק להקליד נשזר לתוכה.
+        if (looksEmpty && sendAttempted) {
+          if (activeSendInterval) {
+            clearInterval(activeSendInterval);
+            activeSendInterval = null;
+          }
+          return;
+        }
+
+        if (looksEmpty) {
           injectText();
         } else {
           target.focus();
@@ -980,11 +1016,13 @@
       for (const btn of sendButtons) {
         btn.click();
         clicked = true;
+        sendAttempted = true;
         break;
       }
 
       // 4. אם לא נמצא כפתור או לחיצה ישירה, נבצע סימולציית Enter
       if (!clicked && target) {
+        sendAttempted = true;
         target.dispatchEvent(new KeyboardEvent('keydown', {
           key: 'Enter',
           code: 'Enter',
