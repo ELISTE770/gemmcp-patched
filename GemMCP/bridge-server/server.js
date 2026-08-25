@@ -576,7 +576,21 @@ const SERVER_ALLOWED_PATH = (() => {
   const raw = (process.env.WIN_ALLOWED_PATH || '').trim();
   if (raw === '*') return null;                       // ללא הגבלה, בבחירה מודעת
   if (raw) return path.resolve(expandPath(raw));
-  return path.join(os.homedir(), 'Desktop');          // ברירת מחדל שמרנית
+
+  // ברירת מחדל שמרנית: שולחן העבודה. ב-Windows עם OneDrive שולחן העבודה האמיתי
+  // עשוי לשבת תחת OneDrive, ואז ~/Desktop הוא תיקייה כמעט ריקה שאינה מה שהמשתמש
+  // רואה. בודקים את שניהם ובוחרים את זה שקיים ומאוכלס.
+  const candidates = [];
+  if (process.env.OneDrive) candidates.push(path.join(process.env.OneDrive, 'Desktop'));
+  if (process.env.OneDriveCommercial) candidates.push(path.join(process.env.OneDriveCommercial, 'Desktop'));
+  candidates.push(path.join(os.homedir(), 'Desktop'));
+
+  for (const c of candidates) {
+    try {
+      if (fs.existsSync(c) && fs.readdirSync(c).length > 0) return c;
+    } catch (e) { /* לא נגיש - ננסה את הבא */ }
+  }
+  return path.join(os.homedir(), 'Desktop');
 })();
 
 // השוואת נתיבים חייבת לכבד גבול של מפריד תיקיות. startsWith גולמי הופך תיקייה

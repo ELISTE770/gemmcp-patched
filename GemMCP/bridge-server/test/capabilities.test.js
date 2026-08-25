@@ -10,8 +10,9 @@ const path = require('path');
 
 const BASE = 'http://127.0.0.1:3000';
 const HOME = process.env.USERPROFILE || process.env.HOME;
-const DESKTOP = path.join(HOME, 'Desktop');
-const WORK = path.join(DESKTOP, '_gemmcp_test');
+// נגזר מהשרת בזמן ריצה, ראה למטה
+let DESKTOP = path.join(HOME, 'Desktop');
+let WORK = path.join(DESKTOP, '_gemmcp_test');
 
 let TOKEN = '';
 try { TOKEN = fs.readFileSync(path.join(__dirname, '..', '.token'), 'utf8').trim(); } catch (e) {}
@@ -37,6 +38,12 @@ const run = (action, params) => post('/api/windows/execute', { action, params })
 const plan = (steps) => post('/api/windows/plan', { plan: steps });
 
 (async () => {
+  const pre = await (await fetch(BASE + '/api/health')).json();
+  if (pre.permissions && pre.permissions.allowedPath && pre.permissions.allowedPath !== '*') {
+    DESKTOP = pre.permissions.allowedPath;
+    WORK = path.join(DESKTOP, '_gemmcp_test');
+  }
+
   // ניקוי מצב קודם והכנת סביבת עבודה
   fs.rmSync(WORK, { recursive: true, force: true });
   fs.mkdirSync(WORK, { recursive: true });

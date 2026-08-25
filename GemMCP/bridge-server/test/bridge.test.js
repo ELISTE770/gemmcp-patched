@@ -10,7 +10,9 @@ const path = require('path');
 
 const BASE = 'http://127.0.0.1:3000';
 const HOME = process.env.USERPROFILE || process.env.HOME;
-const DESKTOP = path.join(HOME, 'Desktop');
+// התיקייה לבדיקה נגזרת מהתקרה שהשרת מדווח, לא מהנחה על מיקום שולחן העבודה.
+// ב-Windows עם OneDrive שולחן העבודה האמיתי אינו ~/Desktop.
+let DESKTOP = path.join(HOME, 'Desktop');
 
 // האימות אופציונלי: פעיל רק אם BRIDGE_AUTH_TOKEN מוגדר ב-.env. הבדיקות
 // מתאימות את עצמן למצב בפועל במקום להניח אחד מהם.
@@ -52,6 +54,9 @@ function dir(p, permissions) {
 (async () => {
   const health = (await call(null, { path: '/api/health', method: 'GET' })).json || {};
   const authOn = !!health.authRequired;
+  if (health.permissions && health.permissions.allowedPath && health.permissions.allowedPath !== '*') {
+    DESKTOP = health.permissions.allowedPath;
+  }
 
   console.log('');
   console.log('=== authentication: ' + (authOn ? 'token enforced' : 'token opt-in, currently off') + ' ===');

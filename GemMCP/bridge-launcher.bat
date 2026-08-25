@@ -1,15 +1,20 @@
-@echo off
+﻿@echo off
 setlocal enabledelayedexpansion
 
-REM 1. Run smart locator to update last_path.txt
-powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0find-and-start.ps1"
-
-REM 2. Read resolved project path
-set "LAST_PATH_FILE=%LOCALAPPDATA%\GemMCP\last_path.txt"
+REM The script's own folder is always correct and needs no decoding, so it is
+REM tried first. The cached path is only a fallback for when this .bat is
+REM invoked from somewhere else - and `set /p` reads it using the console
+REM codepage, which mangles any non-ASCII path, so it must not be preferred.
 set "TARGET_DIR="
 
-if exist "%LAST_PATH_FILE%" (
-    set /p TARGET_DIR=<"%LAST_PATH_FILE%"
+if exist "%~dp0bridge-server\server.js" (
+    set "TARGET_DIR=%~dp0"
+) else (
+    powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0find-and-start.ps1"
+    set "LAST_PATH_FILE=%LOCALAPPDATA%\GemMCP\last_path.txt"
+    if exist "%LAST_PATH_FILE%" (
+        set /p TARGET_DIR=<"%LAST_PATH_FILE%"
+    )
 )
 
 if "!TARGET_DIR!"=="" (
