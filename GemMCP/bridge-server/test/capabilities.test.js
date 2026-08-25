@@ -25,7 +25,20 @@ function check(name, condition, detail) {
   else { fail++; failures.push({ name, detail }); console.log('  [FAIL] ' + name + (detail ? '  -> ' + detail : '')); }
 }
 
-async function post(pathname, body) {
+
+// החבילה עצמה מייצרת יותר מ-40 בקשות בחלון של 10 שניות, ולכן חוטפת 429 מהלימיטר
+// האמיתי. במקום להחליש את ההגנה לצורך הבדיקות, מחכים ומנסים שוב - כך הלימיטר
+// נשאר בתוקף גם בזמן שהבדיקות רצות.
+async function withRateLimitRetry(fn) {
+  let out = await fn();
+  if (out && out.status === 429) {
+    await new Promise((r) => setTimeout(r, 10500));
+    out = await fn();
+  }
+  return out;
+}
+
+async function postOnce(pathname, body) {
   const headers = { 'Content-Type': 'application/json' };
   if (TOKEN) headers['x-bridge-token'] = TOKEN;
   const res = await fetch(BASE + pathname, { method: 'POST', headers, body: JSON.stringify(body) });
@@ -34,6 +47,7 @@ async function post(pathname, body) {
   return { status: res.status, json };
 }
 
+const post = (pathname, body) => withRateLimitRetry(() => postOnce(pathname, body));
 const run = (action, params) => post('/api/windows/execute', { action, params });
 const plan = (steps) => post('/api/windows/plan', { plan: steps });
 
@@ -106,6 +120,29 @@ const plan = (steps) => post('/api/windows/plan', { plan: steps });
 
   const escape = await run('copy_file', { from: path.join(WORK, 'alpha.txt'), to: 'C:/Windows/evil.txt' });
   check('copy_file cannot write outside the ceiling', !(escape.json && escape.json.success), 'status ' + escape.status);
+
+  console.log('');
+  console.log('=== hostile input (findings from the adversarial review) ===');
+
+  // רצף כוכביות תרגם ל-'.*.*.*' וגרם ל-backtracking קטסטרופלי שהקפיא את הגשר
+  const t0 = Date.now();
+  const redos = await run('find_files', { path: WORK, pattern: '*'.repeat(40) + 'x' });
+  const elapsed = Date.now() - t0;
+  check('a pathological glob does not hang the bridge', elapsed < 3000, elapsed + 'ms');
+  check('the bridge is still responsive afterwards',
+        (await (await fetch(BASE + '/api/health')).json()).status === 'ok');
+
+  // הפניות שנפתרו דרך שרשרת הפרוטוטייפ שלפו אובייקטים והכניסו אותם לפרמטרים
+  const protoRef = await plan([
+    { action: 'list_directory', path: WORK, as: 'listing' },
+    { action: 'read_file', path: '$listing.constructor' }
+  ]);
+  check('a $constructor reference cannot pull a host object into a parameter',
+        protoRef.json.success === false, JSON.stringify(protoRef.json && protoRef.json.error));
+
+  const protoAlias = await plan([{ action: 'list_directory', path: WORK, as: '__proto__' }]);
+  check('an alias named __proto__ is rejected outright',
+        protoAlias.status === 400, 'got ' + protoAlias.status);
 
   console.log('');
   console.log('=== plans ===');

@@ -10,7 +10,10 @@
   // autoExecute מ-chrome.storage (למשל הסרה והוספה מחדש של התוסף) החזיר בשקט
   // הרצה אוטומטית ללא אישור.
   let isAutoExecute = false;
-  let activeServices = ['supabase', 'fetch'];
+  // ברירת המחדל היא השירותים שעובדים ללא שום הגדרה. supabase היה בברירת
+  // המחדל למרות שהוא דורש URL ומפתח, בעוד windows - היחיד שעובד מיד - היה
+  // כבוי, כך שאחרי התקנה נקייה הגשר נראה מנותק בלי סיבה נראית לעין.
+  let activeServices = ['fetch', 'windows'];
   let connectedServices = ['fetch', 'windows'];
   let processedHashes = new Set();
   let isExecuting = false;
@@ -80,7 +83,7 @@
 
     chrome.storage.sync.get(['activeServices', ...CONNECTION_KEYS], (data) => {
       connectedServices = computeConnectedServices(data);
-      activeServices = (data.activeServices || ['supabase', 'fetch'])
+      activeServices = (data.activeServices || ['fetch', 'windows'])
         .filter(s => connectedServices.includes(s));
       renderServicesList();
     });

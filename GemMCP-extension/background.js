@@ -121,7 +121,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
           const workspaceName = notionData.workspaceName || 'Notion Workspace';
 
           const storedActive = await chrome.storage.sync.get(['activeServices']);
-          const activeServices = storedActive.activeServices || ['supabase', 'fetch'];
+          const activeServices = storedActive.activeServices || ['fetch', 'windows'];
           if (!activeServices.includes('notion')) activeServices.push('notion');
 
           await chrome.storage.sync.set({
@@ -180,7 +180,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
           }
 
           const storedActive = await chrome.storage.sync.get(['activeServices']);
-          const activeServices = storedActive.activeServices || ['supabase', 'fetch'];
+          const activeServices = storedActive.activeServices || ['fetch', 'windows'];
           if (!activeServices.includes('github')) activeServices.push('github');
 
           await chrome.storage.sync.set({
@@ -216,7 +216,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
           const refreshToken = tokenData.refreshToken;
 
           const storedActive = await chrome.storage.sync.get(['activeServices']);
-          const activeServices = storedActive.activeServices || ['supabase', 'fetch'];
+          const activeServices = storedActive.activeServices || ['fetch', 'windows'];
           if (!activeServices.includes('supabase')) activeServices.push('supabase');
 
           let projectName = '';
@@ -486,7 +486,7 @@ function normalizeServiceName(service) {
  * נתב פקודות ראשי
  */
 async function handleOmniToolExecution(service, toolCall, config) {
-  const activeServices = Array.isArray(config?.activeServices) ? config.activeServices : ['supabase', 'fetch'];
+  const activeServices = Array.isArray(config?.activeServices) ? config.activeServices : ['fetch', 'windows'];
   const srv = normalizeServiceName(service);
   const isActive = srv === 'custom' || srv.startsWith('custom_')
     ? (activeServices.includes('custom') || activeServices.some(s => s.startsWith('custom_')))

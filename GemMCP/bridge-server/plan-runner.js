@@ -18,11 +18,18 @@
 
 const MAX_STEPS = 40;
 
-// שליפת ערך לפי נתיב כמו  pdfs[0].path  מתוך מפת התוצאות
+// שמות שאסור להשתמש בהם כשם שלב או כשדה בהפניה. בלעדיהם הפניה כמו
+// $constructor או $x.__proto__ הייתה שולפת אובייקט מתוך שרשרת הפרוטוטייפ
+// ומכניסה אותו לפרמטר של פעולה.
+const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+// שליפת ערך לפי נתיב כמו  pdfs[0].path  מתוך מפת התוצאות.
+// רק תכונות עצמיות נקראות - לעולם לא דרך שרשרת הפרוטוטייפ.
 function resolveReference(ref, results) {
   const body = ref.slice(1);                       // מסירים את ה-$
   const head = body.match(/^[A-Za-z_][A-Za-z0-9_]*/);
-  if (!head) return undefined;
+  if (!head || FORBIDDEN_KEYS.has(head[0])) return undefined;
+  if (!Object.prototype.hasOwnProperty.call(results, head[0])) return undefined;
 
   let value = results[head[0]];
   let rest = body.slice(head[0].length);
@@ -36,13 +43,20 @@ function resolveReference(ref, results) {
     }
     const field = rest.match(/^\.([A-Za-z_][A-Za-z0-9_]*)/);
     if (field) {
-      value = (typeof value === 'object') ? value[field[1]] : undefined;
+      const key = field[1];
+      if (FORBIDDEN_KEYS.has(key) || typeof value !== 'object' ||
+          !Object.prototype.hasOwnProperty.call(value, key)) {
+        return undefined;
+      }
+      value = value[key];
       rest = rest.slice(field[0].length);
       continue;
     }
     break;                                          // תחביר לא מוכר - עוצרים
   }
-  return value;
+
+  // פונקציה לעולם אינה ערך לגיטימי לפרמטר של פעולה
+  return typeof value === 'function' ? undefined : value;
 }
 
 // החלפת הפניות בתוך הפרמטרים של שלב
@@ -90,7 +104,7 @@ async function runPlan(steps, runAction) {
     throw e;
   }
 
-  const results = {};
+  const results = Object.create(null);   // ללא prototype - אין מה לזהם
   const log = [];
 
   for (let i = 0; i < steps.length; i++) {
@@ -102,7 +116,14 @@ async function runPlan(steps, runAction) {
       throw e;
     }
 
-    const { action: _a, as: alias, ...rawParams } = step;
+    const { action: _a, as: rawAlias, ...rawParams } = step;
+    const alias = (typeof rawAlias === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(rawAlias) &&
+                   !FORBIDDEN_KEYS.has(rawAlias)) ? rawAlias : null;
+    if (rawAlias && !alias) {
+      const e = new Error(`שלב ${i + 1}: שם התוצאה '${rawAlias}' אינו חוקי.`);
+      e.status = 400;
+      throw e;
+    }
     const params = substitute(rawParams, results);
 
     const started = Date.now();

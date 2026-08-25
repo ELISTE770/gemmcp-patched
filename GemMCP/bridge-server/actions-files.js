@@ -122,10 +122,18 @@ function createFileActions(deps) {
     // חיפוש לפי תבנית, עם עימוד. מחליף את הצורך ב-Get-ChildItem דרך run_command.
     find_files(params) {
       needRead();
-      const root = validatePathInScope(params.path || '.');
+      // ברירת מחדל: התחום המותר, ולא תיקיית העבודה של השרת. '.' היה מתפרש
+      // כתיקיית bridge-server, שאין שום סיבה שהמודל יסרוק אותה.
+      const root = validatePathInScope(params.path || perms.allowedPath || '.');
       if (!fs.existsSync(root)) fail(`התיקייה אינה קיימת: ${params.path}`, 404);
 
-      const pattern = String(params.pattern || '*');
+      let pattern = String(params.pattern || '*');
+      if (pattern.length > 200) fail('התבנית ארוכה מדי (מקסימום 200 תווים).');
+
+      // רצף כוכביות מתקפל לאחת. '**' זהה ל-'*' מבחינת glob, אבל בתרגום ישיר
+      // הוא הופך ל-'.*.*' ויוצר backtracking קטסטרופלי: תבנית כמו '***...*x'
+      // הקפיאה את הרגקס מעל 40 שניות ומשתקת את הגשר, שהוא חד-תהליכי.
+      pattern = pattern.replace(/[*]{2,}/g, '*');
       // glob פשוט: * ו-? בלבד, מתורגם ל-RegExp אחרי בריחה של כל השאר
       const rx = new RegExp('^' + pattern
         .replace(/[.+^${}()|[\]\\]/g, '\\$&')

@@ -29,7 +29,20 @@ function check(name, condition, detail) {
   else { fail++; failures.push({ name, detail }); console.log('  [FAIL] ' + name + (detail ? '  -> ' + detail : '')); }
 }
 
-async function call(body, opts) {
+
+// החבילה עצמה מייצרת יותר מ-40 בקשות בחלון של 10 שניות, ולכן חוטפת 429 מהלימיטר
+// האמיתי. במקום להחליש את ההגנה לצורך הבדיקות, מחכים ומנסים שוב - כך הלימיטר
+// נשאר בתוקף גם בזמן שהבדיקות רצות.
+async function withRateLimitRetry(fn) {
+  let out = await fn();
+  if (out && out.status === 429) {
+    await new Promise((r) => setTimeout(r, 10500));
+    out = await fn();
+  }
+  return out;
+}
+
+async function callOnce(body, opts) {
   opts = opts || {};
   const headers = { 'Content-Type': 'application/json' };
   if (opts.token !== null && TOKEN) headers['x-bridge-token'] = opts.token || TOKEN;
@@ -44,6 +57,8 @@ async function call(body, opts) {
   try { json = await res.json(); } catch (e) { /* לא JSON */ }
   return { status: res.status, json: json };
 }
+
+const call = (body, opts) => withRateLimitRetry(() => callOnce(body, opts));
 
 function dir(p, permissions) {
   const o = { action: 'list_directory', params: { path: p } };
