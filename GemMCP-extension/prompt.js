@@ -114,15 +114,30 @@ const OMNI_MCP_REGISTRY = {
 /**
  * פרומפטי ברירת מחדל עבור כל כלי (הסבר מלא + דוגמאות מפורטות)
  */
-const OMNI_DEFAULT_TOOL_PROMPTS = {
-  windows: `Format response strictly as a JSON object for Windows OS:
-- open_app: {"service": "windows", "action": "open_app", "app_name": "<name>"}
-- list_directory: {"service": "windows", "action": "list_directory", "path": "<path e.g. ~/Downloads, ~/Desktop, C:\\...>"}
-- read_file: {"service": "windows", "action": "read_file", "path": "<path>"}
-- write_file: {"service": "windows", "action": "write_file", "path": "<path>", "content": "<text>"}
-- run_command: {"service": "windows", "action": "run_command", "command": "<powershell_command>"}
+// רשימת הפעולות של Windows הופיעה קודם פעמיים, מילה במילה, ובשתיהן היו חסרות
+// make_dir, copy_file, move_file, delete_file ו-find_files. מקור אחד כדי שלא
+// יסטו שוב, ובו גם ההנחיה להעדיף פעולה ייעודית על פני PowerShell.
+const WINDOWS_TOOL_LINES = `Format response strictly as a JSON object for Windows OS:
+- read_file:      {"service": "windows", "action": "read_file", "path": "<path>"}
+- write_file:     {"service": "windows", "action": "write_file", "path": "<path>", "content": "<text>"}
+- list_directory: {"service": "windows", "action": "list_directory", "path": "<e.g. ~/Downloads, ~/Desktop>"}
+- find_files:     {"service": "windows", "action": "find_files", "path": "<dir>", "pattern": "*.pdf"}
+- make_dir:       {"service": "windows", "action": "make_dir", "path": "<path>"}
+- copy_file:      {"service": "windows", "action": "copy_file", "from": "<path>", "to": "<path>"}
+- move_file:      {"service": "windows", "action": "move_file", "from": "<path>", "to": "<path>"}
+- delete_file:    {"service": "windows", "action": "delete_file", "path": "<path>"}   (Recycle Bin; add "recursive": true for a non-empty folder)
+- open_app:       {"service": "windows", "action": "open_app", "app_name": "<name>"}
 - clipboard_read: {"service": "windows", "action": "clipboard_read"}
-- clipboard_write: {"service": "windows", "action": "clipboard_write", "text": "<text>"}`,
+- clipboard_write:{"service": "windows", "action": "clipboard_write", "text": "<text>"}
+- run_command:    {"service": "windows", "action": "run_command", "command": "<powershell_command>"}
+
+PREFER a dedicated action over run_command. Use run_command ONLY when nothing
+above fits: it is disabled by default and is the one permission the allowed-folder
+limit cannot contain. Create a folder with make_dir, not New-Item. Move or delete
+with move_file / delete_file, not PowerShell.`;
+
+const OMNI_DEFAULT_TOOL_PROMPTS = {
+  windows: WINDOWS_TOOL_LINES,
 
   supabase: `Format response strictly as a JSON object for Supabase:
 - execute_sql: {"service": "supabase", "action": "execute_sql", "query": "<SQL query based on request>"}`,
@@ -161,10 +176,36 @@ function generateOmniSystemPrompt(activeServices = ['supabase', 'notion', 'fetch
   const toolSchemas = [];
 
   if (activeServices.includes('windows')) {
+    // הרשימה כאן היא כל מה שהמודל יודע עליו. קודם היא פרסמה run_command אבל
+    // השמיטה את make_dir, copy_file, move_file, delete_file, find_files ואת
+    // התוכניות - כך שכשהתבקש ליצור תיקייה, PowerShell היה הכלי היחיד שהוא ראה.
+    //
+    // זו לולאה רעה: run_command היא ההרשאה היחידה שגבול התיקייה אינו כולא,
+    // והיא כבויה כברירת מחדל. הפעולה נכשלת, והתיקון הטבעי של המשתמש הוא
+    // להדליק בדיוק את ההרשאה המסוכנת ביותר - בשביל משימה שפעולה ייעודית
+    // הייתה מבצעת בתוך התחום המותר.
     toolSchemas.push(`- Windows OS (service: "windows"):
-  Actions: open_app, list_directory, read_file, write_file, run_command, clipboard_read, clipboard_write
-  Example: {"service": "windows", "action": "open_app", "app_name": "calc"}
-  Example: {"service": "windows", "action": "list_directory", "path": "~/Downloads"}`);
+  Files:     read_file, write_file, list_directory, find_files
+  Managing:  make_dir, copy_file, move_file, delete_file
+  Other:     open_app, clipboard_read, clipboard_write, run_command
+  PREFER the dedicated action over run_command. Use run_command ONLY when no
+  dedicated action fits - it is disabled by default and is the one permission
+  the allowed-folder limit cannot contain. To create a folder use make_dir,
+  not New-Item. To move or delete, use move_file / delete_file, not PowerShell.
+  delete_file goes to the Recycle Bin; add "recursive": true for a non-empty folder.
+  Example: {"service": "windows", "action": "make_dir", "path": "~/Desktop/Reports"}
+  Example: {"service": "windows", "action": "find_files", "path": "~/Desktop", "pattern": "*.pdf"}
+  Example: {"service": "windows", "action": "list_directory", "path": "~/Downloads"}
+
+  For a task needing several steps, send ONE plan instead of separate commands.
+  Name a step with "as", then reference it as $name, $name.field or $name[i].
+  A plan always asks the user once, rather than once per step.
+  Example: {"service": "windows", "plan": [
+    {"action": "find_files", "path": "~/Desktop", "pattern": "*.pdf", "as": "pdfs"},
+    {"action": "make_dir", "path": "~/Desktop/PDF"},
+    {"action": "move_file", "from": "$pdfs.items[0].path", "to": "~/Desktop/PDF"}
+  ]}
+  References are not allowed inside a run_command command string.`);
   }
 
   if (activeServices.includes('supabase')) {
@@ -227,14 +268,7 @@ function generateSingleToolPrompt(serviceId, customServerConfig = null, customTo
   let tool = OMNI_MCP_REGISTRY[serviceId];
 
   if (serviceId === 'windows') {
-    return `${userPrefix}Format response strictly as a JSON object for Windows OS:
-- open_app: {"service": "windows", "action": "open_app", "app_name": "<name>"}
-- list_directory: {"service": "windows", "action": "list_directory", "path": "<path e.g. ~/Downloads, ~/Desktop, C:\\...>"}
-- read_file: {"service": "windows", "action": "read_file", "path": "<path>"}
-- write_file: {"service": "windows", "action": "write_file", "path": "<path>", "content": "<text>"}
-- run_command: {"service": "windows", "action": "run_command", "command": "<powershell_command>"}
-- clipboard_read: {"service": "windows", "action": "clipboard_read"}
-- clipboard_write: {"service": "windows", "action": "clipboard_write", "text": "<text>"}`;
+    return `${userPrefix}${WINDOWS_TOOL_LINES}`;
   }
 
   if (serviceId === 'supabase') {
