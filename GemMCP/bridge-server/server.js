@@ -509,6 +509,55 @@ function checkDangerousWindowsCommands(cmd) {
 }
 
 // הרחבת נתיב משתמש: ~ (תיקיית הבית) ומשתני סביבה בסגנון %VAR% (למשל %USERPROFILE%)
+// שולחן העבודה, המסמכים והתמונות מופנים ל-OneDrive במחשבים רבים, ואז
+// os.homedir() + '/Desktop' הוא תיקייה כמעט ריקה שאינה מה שהמשתמש רואה.
+//
+// אומת מקצה לקצה: המודל ביקש '~/Desktop', הנתיב נפתר לתיקיית הבית, והבקשה
+// נחסמה כחורגת מהתחום - למרות שהמשתמש התכוון בדיוק לתיקייה המורשית.
+//
+// הרישום הוא המקור הסמכותי: שם Windows רושם את ההפניה בפועל, ולכן לא מנחשים.
+const KNOWN_FOLDER_KEYS = {
+  desktop: 'Desktop',
+  documents: 'Personal',
+  pictures: 'My Pictures',
+  music: 'My Music',
+  videos: 'My Video',
+  downloads: '{374DE290-123F-4565-9164-39C4925E467B}'
+};
+
+const knownFolders = (() => {
+  const out = {};
+  if (process.platform !== 'win32') return out;
+  const SEP = String.fromCharCode(92);
+  try {
+    const regKey = ['HKCU', 'Software', 'Microsoft', 'Windows', 'CurrentVersion',
+                    'Explorer', 'User Shell Folders'].join(SEP);
+    const raw = require('child_process').execFileSync('reg', ['query', regKey],
+      { encoding: 'utf8', timeout: 5000 });
+
+    for (const line of raw.split(String.fromCharCode(10))) {
+      const t = line.trim();
+      const marker = t.indexOf('REG_');
+      if (marker <= 0) continue;
+      const name = t.slice(0, marker).trim();
+      const after = t.slice(marker);
+      const sz = after.indexOf('SZ');
+      if (sz === -1) continue;
+      const value = after.slice(sz + 2).trim();
+
+      const slot = Object.keys(KNOWN_FOLDER_KEYS)
+        .find((k) => KNOWN_FOLDER_KEYS[k].toLowerCase() === name.toLowerCase());
+      if (!slot || out[slot]) continue;
+
+      const expanded = value.replace(/%([^%]+)%/g, (all, v) => process.env[v] || all);
+      if (fs.existsSync(expanded)) out[slot] = expanded;
+    }
+  } catch (e) {
+    console.warn('⚠️ קריאת תיקיות המערכת מהרישום נכשלה, נופלים לתיקיית הבית:', e.message);
+  }
+  return out;
+})();
+
 function expandPath(inputPath) {
   if (!inputPath || typeof inputPath !== 'string') return inputPath;
   let p = inputPath.trim();
@@ -517,7 +566,15 @@ function expandPath(inputPath) {
   if (p === '~') {
     p = os.homedir();
   } else if (p.startsWith('~/') || p.startsWith('~\\')) {
-    p = path.join(os.homedir(), p.slice(2));
+    const rest = p.slice(2).split(String.fromCharCode(92)).join('/');
+    const slash = rest.indexOf('/');
+    const first = (slash === -1 ? rest : rest.slice(0, slash)).toLowerCase();
+    const tail = slash === -1 ? '' : rest.slice(slash + 1);
+    // '~/Desktop' חייב להצביע על שולחן העבודה שהמשתמש באמת רואה, גם כשהוא
+    // מופנה ל-OneDrive. בלי זה כל בקשה של המודל ל-~/Desktop נחסמה כחריגה.
+    p = knownFolders[first]
+      ? (tail ? path.join(knownFolders[first], tail) : knownFolders[first])
+      : path.join(os.homedir(), p.slice(2));
   }
 
   // הרחבת %VAR% מוגבלת לרשימת היתר של משתני נתיב מוכרים.

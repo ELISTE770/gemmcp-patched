@@ -273,6 +273,33 @@ const plan = (steps) => post('/api/windows/plan', { plan: steps });
   check('the refusal says how many items are at stake',
         /\d+\s*פריטים/.test(delDir.json.error || ''), delDir.json.error);
 
+  // ---- הרחבת ~ לתיקיות המערכת האמיתיות ----
+  console.log('');
+  console.log('=== tilde paths ===');
+
+  // אומת מקצה לקצה מול ג'מיני: המודל שלח '~/Desktop', זה נפתר ל-
+  // os.homedir()+'/Desktop' - תיקייה שאינה שולחן העבודה שהמשתמש רואה כשהוא
+  // מופנה ל-OneDrive - והבקשה נחסמה כחריגה מהתחום. כלומר התכונה המרכזית של
+  // הכלי לא עבדה בכלל במחשב עם OneDrive.
+  const desktopIsCeiling = path.basename(DESKTOP).toLowerCase() === 'desktop';
+  if (desktopIsCeiling) {
+    const tilde = await run('list_directory', { path: '~/Desktop' });
+    check('~/Desktop resolves to the real desktop, not the home folder',
+          tilde.json.success === true, tilde.json.error);
+
+    const tildeBack = await run('list_directory', { path: '~' + String.fromCharCode(92) + 'Desktop' });
+    check('the backslash form resolves too', tildeBack.json.success === true, tildeBack.json.error);
+
+    const nested = await run('list_directory', { path: '~/Desktop/_gemmcp_test' });
+    check('a nested path under ~ keeps its tail', nested.json.success === true, nested.json.error);
+  } else {
+    console.log('  [skip] tilde paths - התקרה אינה שולחן העבודה');
+  }
+
+  // ~ עדיין אינו מפתח דלת: תיקיות מחוץ לתקרה נחסמות כרגיל
+  const outsideTilde = await run('list_directory', { path: '~/AppData' });
+  check('~ does not bypass the ceiling', outsideTilde.json.success === false);
+
   // ניקוי
   fs.rmSync(WORK, { recursive: true, force: true });
 
