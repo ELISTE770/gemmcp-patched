@@ -77,6 +77,7 @@
       isAutoExecute = !!changes.autoExecute.newValue;
       const autoToggle = document.getElementById('omni-mcp-auto-toggle');
       if (autoToggle) autoToggle.checked = isAutoExecute;
+      syncAutoRunWarning();
     }
 
     if (!changes.activeServices && !connectionChanged) return;
@@ -195,6 +196,15 @@
             <input type="checkbox" id="omni-mcp-auto-toggle" ${isAutoExecute ? 'checked' : ''} style="cursor: pointer; transform: scale(1.2);">
           </div>
 
+          <div id="omni-mcp-autorun-warning" ${isAutoExecute ? '' : 'hidden'}
+               style="display:flex; gap:6px; align-items:flex-start; margin:2px 0 8px; padding:7px 9px;
+                      border:1px solid #b45309; background:rgba(180,83,9,.14); border-radius:7px;
+                      font-size:11px; line-height:1.5; color:#fcd34d;">
+            <span>⚠️</span>
+            <span>הרצה אוטומטית דלוקה. פעולות קריאה ירוצו בלי לשאול אותך.
+                  כתיבה, מחיקה והרצת פקודות עדיין דורשות אישור.</span>
+          </div>
+
           <div id="omni-mcp-pending-actions"></div>
 
           <details class="omni-mcp-logs-details" id="omni-mcp-logs-details">
@@ -202,6 +212,11 @@
               <span class="omni-mcp-logs-arrow">▾</span>
               <span>${t('widgetLogsTitle', currentLang)}</span>
               <span class="omni-mcp-logs-error-badge" id="omni-mcp-logs-error-badge" hidden>0 ${t('widgetErrorsBadge', currentLang)}</span>
+              <span style="flex:1"></span>
+              <span id="omni-mcp-logs-export" title="ייצוא היומן לקובץ"
+                    style="font-size:10.5px; color:#93c5fd; cursor:pointer; user-select:none;">ייצוא</span>
+              <span id="omni-mcp-logs-clear" title="ניקוי היומן"
+                    style="font-size:10.5px; color:#94a3b8; cursor:pointer; user-select:none; margin-inline-start:8px;">ניקוי</span>
             </summary>
             <div id="omni-mcp-logs" style="display: flex; flex-direction: column; gap: 6px; max-height: 160px; overflow-y: auto; margin-top: 6px;">
               <div class="omni-mcp-log-item">${t('widgetLogsReady', currentLang)}</div>
@@ -225,6 +240,8 @@
     const autoToggle = document.getElementById('omni-mcp-auto-toggle');
     const dragHeader = document.getElementById('omni-mcp-drag-header');
     logsContainer = document.getElementById('omni-mcp-logs');
+    restorePersistedLog();
+    wireLogControls();
 
     renderServicesList();
     initWidgetPosition(widgetContainer, toggleBtn, dragHeader, panel);
@@ -254,6 +271,7 @@
     autoToggle.addEventListener('change', (e) => {
       isAutoExecute = e.target.checked;
       chrome.storage.sync.set({ autoExecute: isAutoExecute });
+      syncAutoRunWarning();
       addLog(`מצב Auto-run: ${isAutoExecute ? 'פעיל' : 'כבוי'}`);
     });
 
@@ -611,11 +629,34 @@
     return /שגיאה|נכשל|לרענן|לא נמצא/.test(msg);
   }
 
+  // היומן היה קיים רק בזיכרון של הלשונית. רענון של הדף מחק את כל ההיסטוריה,
+  // ולשונית שנייה לא ראתה דבר ממה שקרה בראשונה - כלומר בדיוק כשמשהו השתבש
+  // וצריך לברר מה בוצע, המידע כבר לא היה קיים.
+  const LOG_STORE_KEY = 'activityLog';
+  const LOG_STORE_MAX = 300;
+
+  async function persistLog(entry) {
+    try {
+      const store = await chrome.storage.local.get([LOG_STORE_KEY]);
+      const list = Array.isArray(store[LOG_STORE_KEY]) ? store[LOG_STORE_KEY] : [];
+      list.push(entry);
+      await chrome.storage.local.set({ [LOG_STORE_KEY]: list.slice(-LOG_STORE_MAX) });
+    } catch (e) { /* יומן שנכשל לעולם לא יפיל פעולה אמיתית */ }
+  }
+
+  async function loadPersistedLog() {
+    try {
+      const store = await chrome.storage.local.get([LOG_STORE_KEY]);
+      return Array.isArray(store[LOG_STORE_KEY]) ? store[LOG_STORE_KEY] : [];
+    } catch (e) { return []; }
+  }
+
   function addLog(msg, opts) {
     console.log(`%c[GemMCP] ${msg}`, 'color: #10b981; font-weight: bold;');
-    if (!logsContainer) return;
 
     const isError = (opts && typeof opts.error === 'boolean') ? opts.error : isErrorLog(msg);
+    persistLog({ ts: new Date().toISOString(), msg: String(msg).slice(0, 500), error: isError });
+    if (!logsContainer) return;
 
     const item = document.createElement('div');
     item.className = `omni-mcp-log-item${isError ? ' error' : ''}`;
@@ -630,6 +671,72 @@
       if (details) details.open = true;
       // פותח גם את החלונית עצמה כדי שהשגיאה לא תתפספס כשהיא מכווצת
       openPanel();
+    }
+  }
+
+  // מציג את ההיסטוריה שנשמרה, כדי שרענון דף או מעבר ללשונית אחרת לא ימחקו
+  // את מה שקרה עד עכשיו.
+  async function restorePersistedLog() {
+    const list = await loadPersistedLog();
+    if (!logsContainer || !list.length) return;
+
+    // הטעינה אסינכרונית, וייתכן שכבר נרשמו הודעות חיות בזמן שחיכינו. לכן לא
+    // מנקים את המיכל אלא רק את שורת הפתיחה, ומוסיפים את ההיסטוריה מתחת -
+    // הודעה חדשה נשארת למעלה, בדיוק כמו בזרימה הרגילה.
+    const placeholder = logsContainer.firstElementChild;
+    if (placeholder && !placeholder.textContent.startsWith('[')) placeholder.remove();
+
+    for (const e of list.slice(-60).reverse()) {
+      const item = document.createElement('div');
+      item.className = `omni-mcp-log-item${e.error ? ' error' : ''}`;
+      let time = '';
+      try { time = new Date(e.ts).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit', second: '2-digit' }); } catch (err) {}
+      item.textContent = `[${time}] ${e.msg}`;
+      logsContainer.appendChild(item);
+    }
+  }
+
+  // הרצה אוטומטית היא ההגדרה היחידה שמוותרת על שאלה לפני פעולה, ולכן היא
+  // צריכה להיות גלויה כל עוד היא דלוקה - לא רק מתג קטן שאפשר לשכוח שנגעת בו.
+  function syncAutoRunWarning() {
+    const el = document.getElementById('omni-mcp-autorun-warning');
+    if (el) el.hidden = !isAutoExecute;
+  }
+
+  function wireLogControls() {
+    const exportEl = document.getElementById('omni-mcp-logs-export');
+    const clearEl = document.getElementById('omni-mcp-logs-clear');
+
+    if (exportEl) {
+      exportEl.addEventListener('click', async (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();                       // אחרת ה-<summary> מתקפל
+        const list = await loadPersistedLog();
+        const TAB = String.fromCharCode(9), NL = String.fromCharCode(10);
+        const body = list
+          .map((e) => [e.ts, e.error ? 'ERROR' : 'ok', e.msg].join(TAB))
+          .join(NL);
+        const url = URL.createObjectURL(new Blob([body], { type: 'text/plain;charset=utf-8' }));
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `gemmcp-log-${new Date().toISOString().slice(0, 10)}.txt`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+      });
+    }
+
+    if (clearEl) {
+      clearEl.addEventListener('click', async (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        try { await chrome.storage.local.remove([LOG_STORE_KEY]); } catch (e) {}
+        if (logsContainer) logsContainer.innerHTML = '';
+        unreadErrors = 0;
+        updateErrorBadge();
+        addLog('היומן נוקה.');
+      });
     }
   }
 
@@ -1088,23 +1195,49 @@
 
           // אם מדובר בטעינה ראשונית של הדף או שההודעה הזו כבר נענתה בהיסטוריית הצ'אט (ולא נלחץ ריענון ידני)
           if (!forceRescan && (isInitialGracePeriod || isElementAlreadyAnswered(el))) {
-            const callKey = `${toolCall.service}_${toolCall.action}_${JSON.stringify(toolCall)}`;
-            processedHashes.add(callKey);
+            processedHashes.add(buildCallKey(toolCall));
             continue;
           }
 
-          const callKey = `${toolCall.service}_${toolCall.action}_${JSON.stringify(toolCall)}`;
+          const callKey = buildCallKey(toolCall);
           if (!forceRescan && processedHashes.has(callKey)) continue;
           processedHashes.add(callKey);
 
           console.log('%c[GemMCP] 🎯 זוהתה פקודת MCP שלמה ותקינה:', 'color: #f59e0b; font-weight: bold;', toolCall);
-          handleDetectedToolCall(toolCall);
+          claimThenHandle(callKey, toolCall, forceRescan);
           foundAndTriggered = true;
           if (forceRescan) break; // בלחיצה ידנית מבצעים רק את הפקודה האחרונה שנמצאה
         }
       }
     }
     return foundAndTriggered;
+  }
+
+  // מזהה השיחה נכנס למפתח, אחרת אותה פקודה בשתי שיחות שונות הייתה נחסמת.
+  function buildCallKey(toolCall) {
+    return `${location.pathname}|${toolCall.service}_${toolCall.action}_${JSON.stringify(toolCall)}`;
+  }
+
+  // תפיסה חוצת-לשוניות לפני ביצוע.
+  //
+  // רשימת "כבר טופל" הייתה מקומית לכל content script. שתי לשוניות פתוחות על
+  // אותה שיחה סרקו את אותו בלוק JSON ושתיהן ירו, כלומר מחיקה או העתקה בוצעו
+  // פעמיים - ועם Auto-Run דלוק זה קורה בלי שנשאלת. ה-service worker הוא
+  // נקודת הסנכרון היחידה שכל הלשוניות רואות.
+  async function claimThenHandle(callKey, toolCall, forceRescan) {
+    // סריקה ידנית היא בקשה מפורשת של המשתמש בלשונית הזו, ולכן עוקפת תפיסה.
+    if (!forceRescan) {
+      try {
+        const res = await chrome.runtime.sendMessage({ action: 'CLAIM_TOOL_CALL', key: callKey });
+        if (res && res.claimed === false) {
+          addLog('⏭️ לשונית אחרת כבר מטפלת בפקודה הזו - מדלגים.');
+          return;
+        }
+      } catch (e) {
+        // ה-worker לא ענה. עדיף לבצע מאשר להיתקע בלי שהמשתמש מבין למה.
+      }
+    }
+    handleDetectedToolCall(toolCall);
   }
 
   function extractFirstJsonObject(str) {
@@ -1330,7 +1463,12 @@
     // תוכנית תמיד עוברת אישור: היא מבצעת כמה פעולות ברצף, וזה בדיוק המקרה
     // שבו המשתמש צריך לראות מה עומד לקרות לפני שזה קורה.
     if (Array.isArray(toolCall.plan) && toolCall.plan.length) return true;
-    return classifyAction(toolCall).level === 'danger';
+
+    // רק פעולות קריאה רצות בלי לשאול. קודם הסף היה 'danger' בלבד, ולכן דרג
+    // 'שינוי' עבר אוטומטית - כלומר copy_file כתב לדיסק, ו-create_repo /
+    // create_issue יצרו דברים ציבוריים ב-GitHub, בלי שנשאלת. פעולה שמשנה
+    // משהו, מקומי או מרוחק, היא בדיוק מה שאישור נועד לו.
+    return classifyAction(toolCall).level !== 'safe';
   }
 
   // תיאור הפעולה בשפה אנושית, כדי שלא יהיה צריך לקרוא JSON כדי להחליט

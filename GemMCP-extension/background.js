@@ -282,7 +282,58 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   }
 });
 
+// תפיסת פקודה לביצוע, משותפת לכל הלשוניות.
+//
+// עד עכשיו רשימת הפקודות שכבר טופלו הייתה Set בזיכרון של כל content script
+// בנפרד. שתי לשוניות פתוחות על אותה שיחה סרקו את אותו בלוק JSON ושתיהן ירו -
+// כלומר מחיקה או העתקה בוצעו פעמיים. עם Auto-Run דלוק זה קורה בלי שנשאלת.
+//
+// ה-service worker הוא נקודת הסנכרון היחידה שכל הלשוניות רואות. chrome.storage
+// .session נשמר גם אם ה-worker נרדם, ומתאפס בסגירת הדפדפן - בדיוק תוחלת החיים
+// הנכונה לרשימה כזו.
+const CLAIM_TTL_MS = 6 * 60 * 60 * 1000;
+const CLAIM_MAX = 500;
+
+// שתי בקשות מקבילות היו שתיהן קוראות לפני שאחת מהן כותבת, ואז שתיהן היו
+// "ראשונות". שרשור ההבטחות הופך את התפיסה לאטומית.
+let claimChain = Promise.resolve();
+
+function claimToolCall(key) {
+  const run = async () => {
+    const store = await chrome.storage.session.get(['claimedCalls']);
+    const claimed = store.claimedCalls || {};
+    const now = Date.now();
+
+    for (const [k, ts] of Object.entries(claimed)) {
+      if (now - ts > CLAIM_TTL_MS) delete claimed[k];
+    }
+    if (Object.prototype.hasOwnProperty.call(claimed, key)) return false;
+
+    claimed[key] = now;
+    const keys = Object.keys(claimed);
+    if (keys.length > CLAIM_MAX) {
+      keys.sort((a, b) => claimed[a] - claimed[b])
+          .slice(0, keys.length - CLAIM_MAX)
+          .forEach((k) => delete claimed[k]);
+    }
+    await chrome.storage.session.set({ claimedCalls: claimed });
+    return true;
+  };
+  claimChain = claimChain.then(run, run);
+  return claimChain;
+}
+
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  // תפיסת פקודה: הלשונית הראשונה שמבקשת מקבלת true, כל השאר false.
+  if (request.action === 'CLAIM_TOOL_CALL') {
+    claimToolCall(String(request.key || ''))
+      .then((ok) => sendResponse({ claimed: ok }))
+      .catch(() => sendResponse({ claimed: true }));   // בכשל, לא חוסמים ביצוע לגיטימי
+    return true;
+  }
+
+
   if (request.action === 'EXECUTE_MCP_TOOL') {
     handleOmniToolExecution(request.service, request.toolCall, request.config)
       .then((data) => sendResponse({ success: true, data }))

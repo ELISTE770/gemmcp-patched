@@ -95,6 +95,22 @@ check('an all-safe plan STILL needs approval',
       requiresExplicitApproval('windows', { plan: [{ action: 'read_file' }] }) === true,
       'a plan runs several actions in sequence - the user must see it first');
 
+// דרג 'שינוי' עבר קודם אוטומטית, כי הסף היה 'danger' בלבד. כלומר copy_file
+// כתב לדיסק ו-create_repo יצר מאגר ציבורי בלי לשאול, כשהרצה אוטומטית דלוקה.
+check('a change-tier local action needs approval',
+      requiresExplicitApproval('windows', { action: 'copy_file' }) === true);
+check('creating a directory needs approval',
+      requiresExplicitApproval('windows', { action: 'make_dir' }) === true);
+check('an outward-facing create needs approval',
+      requiresExplicitApproval('github', { action: 'create_repo' }) === true);
+check('opening a public issue needs approval',
+      requiresExplicitApproval('github', { action: 'create_issue' }) === true);
+check('an unknown action is never auto-run',
+      requiresExplicitApproval('windows', { action: 'something_new' }) === true);
+check('read-only actions still auto-run',
+      requiresExplicitApproval('windows', { action: 'list_directory' }) === false &&
+      requiresExplicitApproval('supabase', { action: 'list_tables' }) === false);
+
 console.log('');
 console.log('=== human-readable descriptions ===');
 check('run_command names the shell',
