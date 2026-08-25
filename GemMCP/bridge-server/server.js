@@ -541,15 +541,28 @@ function expandPath(inputPath) {
 // פתרון קישורים סימבוליים ו-junctions לפני בדיקת התחום. בלי זה, קיצור דרך
 // שיושב בתוך התיקייה המותרת ומצביע החוצה מנהר את הגישה אל מחוץ לתחום.
 function canonicalise(p) {
+  const resolved = path.resolve(p);
   try {
-    return fs.realpathSync.native(p);
+    return fs.realpathSync.native(resolved);
   } catch (e) {
-    // הנתיב אולי עוד לא קיים (כתיבת קובץ חדש) - מנרמלים את ההורה הקיים הקרוב
-    try {
-      const parent = path.dirname(p);
-      if (parent && parent !== p) return path.join(fs.realpathSync.native(parent), path.basename(p));
-    } catch (e2) { /* נופלים חזרה לנתיב המנורמל */ }
-    return path.resolve(p);
+    // הנתיב עוד לא קיים. מטפסים כלפי מעלה עד לאב הקיים הקרוב ביותר, מפענחים
+    // אותו מול הדיסק, ומחברים בחזרה את המקטעים החסרים.
+    //
+    // קודם נבדק רק ההורה המיידי, ולכן שני מקטעים חסרים או יותר גרמו לוויתור
+    // מוחלט על הפענוח. אומת: junction בתוך התחום המותר, עם נתיב כמו
+    // <מותר>/link/newdir/file.txt, עבר את בדיקת התחום וכתב מחוץ לתקרה.
+    const missing = [];
+    let cur = resolved;
+    for (let i = 0; i < 64; i++) {
+      const parent = path.dirname(cur);
+      if (!parent || parent === cur) break;
+      missing.unshift(path.basename(cur));
+      cur = parent;
+      try {
+        return path.join(fs.realpathSync.native(cur), ...missing);
+      } catch (e2) { /* ההורה גם אינו קיים - ממשיכים לטפס */ }
+    }
+    return resolved;
   }
 }
 
@@ -630,8 +643,19 @@ function resolvePermissions(clientPerms = {}) {
 // נשאר שום תיעוד של מה בעצם הורץ על המחשב. כאן כל פעולה נרשמת לקובץ.
 // ---------------------------------------------------------------------------
 const AUDIT_FILE = path.join(__dirname, 'audit.log');
+const AUDIT_MAX_BYTES = Number(process.env.WIN_AUDIT_MAX_BYTES) || 5 * 1024 * 1024;
+
+// היומן נכתב לכל פעולה ולא נמחק לעולם, כך שהוא גדל בלי גבול. שומרים דור אחד
+// אחורה: מי שבודק אירוע צריך את ההיסטוריה הקרובה, לא את כל חיי ההתקנה.
+function rotateAuditIfNeeded() {
+  try {
+    if (fs.statSync(AUDIT_FILE).size < AUDIT_MAX_BYTES) return;
+    fs.renameSync(AUDIT_FILE, AUDIT_FILE + '.1');
+  } catch (e) { /* אין קובץ עדיין, או שהסיבוב נכשל - לא מפילים בגלל יומן */ }
+}
 
 function auditLog(action, params, outcome, detail) {
+  rotateAuditIfNeeded();
   // לא כותבים תוכן קבצים או טקסט לוח שלם - רק מה שצריך כדי לשחזר מה קרה
   const safeParams = {};
   for (const [k, v] of Object.entries(params || {})) {

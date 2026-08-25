@@ -18,6 +18,16 @@
 
 const MAX_STEPS = 40;
 
+// תקרת זמן לכל התוכנית. בלעדיה 40 שלבים כפול 30 שניות פסק-זמן לפקודה נותנים
+// עשרים דקות שבהן הגשר תפוס, הרבה אחרי שהמשתמש כבר הפסיק לחכות ושכח שאישר.
+const DEFAULT_DEADLINE_MS = Number(process.env.WIN_PLAN_DEADLINE_MS) || 120000;
+
+// שדות שערך מוחלף לעולם לא ייכנס אליהם. הסיבה אינה תיאורטית: המשתמש מאשר
+// כרטיס שמציג  run_command: "del $pdfs[0].path" , ומה שרץ בפועל הוא מחרוזת
+// PowerShell שהורכבה משם קובץ מהדיסק. שם קובץ הוא קלט שאפשר לשתול, ולכן זה
+// ערוץ הזרקה: מה שאושר ומה שהורץ אינם אותו טקסט.
+const NO_SUBSTITUTION = { run_command: ['command'] };
+
 // שמות שאסור להשתמש בהם כשם שלב או כשדה בהפניה. בלעדיהם הפניה כמו
 // $constructor או $x.__proto__ הייתה שולפת אובייקט מתוך שרשרת הפרוטוטייפ
 // ומכניסה אותו לפרמטר של פעולה.
@@ -59,6 +69,15 @@ function resolveReference(ref, results) {
   return typeof value === 'function' ? undefined : value;
 }
 
+// הפניה שלא נפתרה עוצרת את התוכנית. קודם היא נשארה כטקסט גולמי, ואז
+// "$pdfs[0].path" הפך לשם קובץ תקין לחלוטין - התוכנית המשיכה לרוץ בשקט על
+// נתיב שאין לו שום קשר למה שהמשתמש אישר.
+function failRef(ref) {
+  const e = new Error(`ההפניה ${ref} אינה מצביעה על תוצאה קיימת. בדוק את שם השלב (as) ואת המבנה שהוא החזיר.`);
+  e.status = 400;
+  throw e;
+}
+
 // החלפת הפניות בתוך הפרמטרים של שלב
 function substitute(params, results) {
   if (params === null || params === undefined) return params;
@@ -67,12 +86,13 @@ function substitute(params, results) {
     // מחרוזת שהיא כולה הפניה - מחזירים את הערך עצמו ולא טקסט
     if (/^\$[A-Za-z_][A-Za-z0-9_[\]().]*$/.test(params)) {
       const v = resolveReference(params, results);
-      return v === undefined ? params : v;
+      if (v === undefined) failRef(params);
+      return v;
     }
     // הפניה משובצת בתוך טקסט - הופכים למחרוזת
     return params.replace(/\$[A-Za-z_][A-Za-z0-9_[\]().]*/g, (m) => {
       const v = resolveReference(m, results);
-      if (v === undefined) return m;
+      if (v === undefined) failRef(m);
       return typeof v === 'object' ? JSON.stringify(v) : String(v);
     });
   }
@@ -86,6 +106,27 @@ function substitute(params, results) {
   }
 
   return params;
+}
+
+// איתור הפניות בשדות שאסור להחליף בהם, לפני שרצה ולו שלב אחד. נכשלים על כל
+// התוכנית ולא רק על השלב הבעייתי, כי חצי תוכנית שרצה משאירה מצב על הדיסק.
+function rejectUnsafeReferences(steps) {
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i] || {};
+    const fields = NO_SUBSTITUTION[step.action];
+    if (!fields) continue;
+    for (const f of fields) {
+      const v = step[f];
+      if (typeof v === 'string' && /\$[A-Za-z_][A-Za-z0-9_]*/.test(v)) {
+        const e = new Error(
+          `שלב ${i + 1}: אסור להשתמש בהפניה כמו ${v.match(/\$[A-Za-z_][A-Za-z0-9_]*/)[0]} בתוך '${f}' של ${step.action}. ` +
+          'הטקסט שהיית מאשר אינו הטקסט שהיה רץ. השתמש בפעולה ייעודית (copy_file, move_file, delete_file) במקום.'
+        );
+        e.status = 400;
+        throw e;
+      }
+    }
+  }
 }
 
 /**
@@ -104,8 +145,11 @@ async function runPlan(steps, runAction) {
     throw e;
   }
 
+  rejectUnsafeReferences(steps);
+
   const results = Object.create(null);   // ללא prototype - אין מה לזהם
   const log = [];
+  const deadline = Date.now() + DEFAULT_DEADLINE_MS;
 
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i] || {};
@@ -113,6 +157,15 @@ async function runPlan(steps, runAction) {
     if (!action) {
       const e = new Error(`שלב ${i + 1} חסר action.`);
       e.status = 400;
+      throw e;
+    }
+
+    if (Date.now() > deadline) {
+      const e = new Error(
+        `התוכנית חרגה ממגבלת הזמן (${Math.round(DEFAULT_DEADLINE_MS / 1000)} שניות) ונעצרה לפני שלב ${i + 1}.`
+      );
+      e.status = 504;
+      e.partial = { completed: i, total: steps.length, log, results };
       throw e;
     }
 
@@ -145,4 +198,4 @@ async function runPlan(steps, runAction) {
   return { completed: steps.length, total: steps.length, log, results };
 }
 
-module.exports = { runPlan, substitute, resolveReference, MAX_STEPS };
+module.exports = { runPlan, substitute, resolveReference, rejectUnsafeReferences, MAX_STEPS };

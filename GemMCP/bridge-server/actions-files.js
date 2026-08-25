@@ -102,18 +102,31 @@ function createFileActions(deps) {
       const target = validatePathInScope(params.path);
       if (!fs.existsSync(target)) fail(`הנתיב אינו קיים: ${params.path}`, 404);
 
+      // מחיקת תיקייה גוררת את כל מה שמתחתיה. "מחק את תיקיית הטיוטות" נראה
+      // תמים בכרטיס האישור גם כשמתחתיה אלפי קבצים, וסל המיחזור מוותר בשקט על
+      // מחיקות גדולות. לכן דורשים דגל מפורש ומדווחים כמה פריטים באמת נמחקים.
+      const isDir = fs.statSync(target).isDirectory();
+      let itemCount = 0;
+      if (isDir) {
+        try { itemCount = fs.readdirSync(target, { recursive: true }).length; } catch (e) {}
+        if (itemCount > 0 && !params.recursive) {
+          fail(`'${path.basename(target)}' היא תיקייה ובתוכה ${itemCount} פריטים. ` +
+               'הוסף recursive=true כדי למחוק אותה על תוכנה.', 409);
+        }
+      }
+
       return new Promise((resolve, reject) => {
         // Shell.Application מעביר לסל המיחזור; fs.rmSync היה מוחק לצמיתות
         const ps = [
           '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command',
           'Add-Type -AssemblyName Microsoft.VisualBasic; ' +
-          (fs.statSync(target).isDirectory()
+          (isDir
             ? `[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory('${target.replace(/'/g, "''")}','OnlyErrorDialogs','SendToRecycleBin')`
             : `[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile('${target.replace(/'/g, "''")}','OnlyErrorDialogs','SendToRecycleBin')`)
         ];
         execFile('powershell.exe', ps, { timeout: 15000 }, (err) => {
           if (err) return reject(Object.assign(new Error(`המחיקה נכשלה: ${err.message}`), { status: 500 }));
-          resolve({ path: target, movedToRecycleBin: true });
+          resolve({ path: target, movedToRecycleBin: true, isDirectory: isDir, items: itemCount });
         });
       });
     },
@@ -140,30 +153,51 @@ function createFileActions(deps) {
         .replace(/\*/g, '.*')
         .replace(/\?/g, '.') + '$', 'i');
 
-      const maxDepth = Number.isInteger(params.max_depth) ? params.max_depth : 6;
+      // max_depth מגיע מהמודל. בלי חסם, max_depth=999999 על תיקייה עמוקה סורק
+      // עץ שלם, והגשר חד-תהליכי - כלומר כל בקשה אחרת ממתינה עד שיסיים.
+      const MAX_ALLOWED_DEPTH = 24;
+      const rawDepth = Number.isInteger(params.max_depth) ? params.max_depth : 6;
+      const maxDepth = Math.min(Math.max(0, rawDepth), MAX_ALLOWED_DEPTH);
       const hardCap = 5000;               // תקרה קשיחה כדי לא לסרוק דיסק שלם
+      const scanCap = 200000;             // גם חיפוש שלא מוצא כלום חייב להיעצר
       const results = [];
       let scanned = 0;
       let truncated = false;
 
       (function walk(dir, depth) {
-        if (depth > maxDepth || results.length >= hardCap) return;
+        if (depth > maxDepth) return;
+        if (results.length >= hardCap || scanned >= scanCap) { truncated = true; return; }
         let entries;
         try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
         for (const entry of entries) {
-          if (results.length >= hardCap) { truncated = true; return; }
+          if (results.length >= hardCap || scanned >= scanCap) { truncated = true; return; }
           const full = path.join(dir, entry.name);
           scanned++;
+
+          // junction או symlink מדווח בנפרד. קודם הוא נפל לענף 'קובץ' ו-statSync
+          // הלך אחרי הקישור, כך שהתשובה הציגה קיצור-דרך לתיקייה בחוץ כאילו הוא
+          // קובץ רגיל בתוך התחום, עם הגודל והתאריך של היעד.
+          if (entry.isSymbolicLink()) {
+            if (!params.dirs_only && rx.test(entry.name)) {
+              results.push({ path: full, type: 'link', size: null, modified: null });
+            }
+            continue;                     // לא יורדים דרך קישור - זה יוצא מהתחום
+          }
+
           if (entry.isDirectory()) {
             if (params.dirs_only && rx.test(entry.name)) results.push({ path: full, type: 'directory' });
             walk(full, depth + 1);
           } else if (!params.dirs_only && rx.test(entry.name)) {
             let size = null, mtime = null;
-            try { const st = fs.statSync(full); size = st.size; mtime = st.mtime.toISOString(); } catch (e) {}
+            try { const st = fs.lstatSync(full); size = st.size; mtime = st.mtime.toISOString(); } catch (e) {}
             results.push({ path: full, type: 'file', size, modified: mtime });
           }
         }
       })(root, 0);
+
+      // הגעה מדויקת לתקרה נספרה קודם כסריקה שלמה: הדחיפה ה-5000 סיימה את הלולאה
+      // בלי להיכנס שוב לתנאי, ו-truncated נשאר false. התשובה נראתה סופית.
+      if (results.length >= hardCap || scanned >= scanCap) truncated = true;
 
       const offset = Math.max(0, Number(params.offset) || 0);
       const limit = Math.min(Math.max(1, Number(params.limit) || 100), 500);
@@ -176,6 +210,7 @@ function createFileActions(deps) {
         total: results.length,
         offset,
         limit,
+        maxDepth,
         returned: page.length,
         hasMore: offset + page.length < results.length,
         truncated,

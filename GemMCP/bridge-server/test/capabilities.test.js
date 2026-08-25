@@ -186,6 +186,93 @@ const plan = (steps) => post('/api/windows/plan', { plan: steps });
   const planEscape = await plan([{ action: 'list_directory', path: 'C:/Windows' }]);
   check('plan steps obey the same path ceiling', planEscape.json.success === false);
 
+  // בריחה מהתחום דרך junction. אומת בפועל לפני התיקון: junction בתוך התחום
+  // המותר, ונתיב יעד עם שני מקטעים חסרים או יותר, גרם ל-canonicalise לוותר על
+  // הפענוח - הבדיקה עברה והקובץ נכתב מחוץ לתקרה.
+  const outside = path.join(require('os').tmpdir(), '_gemmcp_outside_' + process.pid);
+  const link = path.join(WORK, 'link');
+  let junctionMade = false;
+  try {
+    fs.mkdirSync(outside, { recursive: true });
+    fs.symlinkSync(outside, link, 'junction');
+    junctionMade = fs.existsSync(link);
+  } catch (e) { /* יצירת junction עשויה לדרוש הרשאה - מדלגים */ }
+
+  if (junctionMade) {
+    for (const depth of ['escape.txt', 'a/escape.txt', 'a/b/c/escape.txt']) {
+      const res = await run('write_file', { path: path.join(link, depth), content: 'ESCAPED' });
+      check('junction escape blocked (' + depth + ')', res.json.success === false);
+    }
+    const leaked = fs.existsSync(outside) &&
+      fs.readdirSync(outside, { recursive: true }).some((f) => String(f).endsWith('escape.txt'));
+    check('nothing was written outside the ceiling', leaked === false);
+    try { fs.unlinkSync(link); } catch (e) { try { fs.rmdirSync(link); } catch (e2) {} }
+  } else {
+    console.log('  [skip] junction escape - לא ניתן ליצור junction בסביבה הזו');
+  }
+  fs.rmSync(outside, { recursive: true, force: true });
+
+  // ---- הקשחת תוכניות ----
+  console.log('');
+  console.log('=== plan hardening ===');
+
+  // הפניה בתוך run_command: הטקסט שמאושר אינו הטקסט שרץ. שם קובץ הוא קלט
+  // שאפשר לשתול, ולכן זה ערוץ הזרקה לתוך מחרוזת PowerShell.
+  const refInCmd = await plan([
+    { action: 'find_files', pattern: '*.txt', as: 'f' },
+    { action: 'run_command', command: 'Get-Item $f.items[0].path' }
+  ]);
+  check('reference inside run_command is refused',
+        refInCmd.json.success === false && /run_command/.test(refInCmd.json.error || ''));
+  check('the refusal happens before any step runs',
+        !refInCmd.json.partial || refInCmd.json.partial.completed === 0);
+
+  // הפניה שלא נפתרה עצרה קודם להיות טקסט גולמי, והתוכנית המשיכה על נתיב מומצא
+  const badRef = await plan([
+    { action: 'list_directory', path: WORK, as: 'd' },
+    { action: 'make_dir', path: '$nosuch[0].path' }
+  ]);
+  check('an unresolved reference aborts instead of becoming literal text',
+        badRef.json.success === false && /הפניה/.test(badRef.json.error || ''));
+  check('no directory named after the raw reference was created',
+        fs.existsSync(path.join(WORK, '$nosuch[0].path')) === false);
+
+  // שרשור תקין חייב להמשיך לעבוד - ההקשחה לא אמורה לשבור את התכונה עצמה
+  const goodChain = await plan([
+    { action: 'make_dir', path: path.join(WORK, 'chain'), as: 'made' },
+    { action: 'write_file', path: '$made.path/note.txt', content: 'ok' }
+  ]);
+  check('valid chaining still works',
+        goodChain.json.success === true && goodChain.json.data.completed === 2,
+        goodChain.json.error);
+
+  // ---- find_files ----
+  console.log('');
+  console.log('=== find_files limits ===');
+
+  const deep = await run('find_files', { path: WORK, pattern: '*', max_depth: 999999 });
+  check('max_depth is clamped rather than trusted',
+        deep.json.success === true && deep.json.data.maxDepth <= 24,
+        String(deep.json.data && deep.json.data.maxDepth));
+
+  const neg = await run('find_files', { path: WORK, pattern: '*', max_depth: -5 });
+  check('a negative max_depth does not go negative',
+        neg.json.success === true && neg.json.data.maxDepth >= 0);
+
+  // ---- delete_file ----
+  console.log('');
+  console.log('=== delete_file scope ===');
+
+  const full = path.join(WORK, 'notempty');
+  fs.mkdirSync(path.join(full, 'sub'), { recursive: true });
+  fs.writeFileSync(path.join(full, 'sub', 'a.txt'), 'x');
+  const delDir = await run('delete_file', { path: full });
+  check('deleting a non-empty directory needs an explicit flag',
+        delDir.json.success === false && /recursive/.test(delDir.json.error || ''));
+  check('the directory survived the refused delete', fs.existsSync(full));
+  check('the refusal says how many items are at stake',
+        /\d+\s*פריטים/.test(delDir.json.error || ''), delDir.json.error);
+
   // ניקוי
   fs.rmSync(WORK, { recursive: true, force: true });
 
