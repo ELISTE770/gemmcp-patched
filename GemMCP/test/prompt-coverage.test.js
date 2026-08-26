@@ -106,6 +106,29 @@ check('it warns that references cannot go inside run_command',
       /not allowed inside a run_command/i.test(mainPrompt));
 
 console.log('');
+console.log('=== every server action is classified for the approval card ===');
+
+// media_control ו-manage_windows נוספו לשרת בלי ערך ב-ACTION_RISK, ולכן נפלו
+// לברירת המחדל הגנרית: הכרטיס אמר רק "להריץ media_control בשירות windows".
+// זה המשטח שכל תפקידו להסביר מה עומד לקרות לפני שהמשתמש מאשר.
+const contentSrc = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+const contentSrc2 = contentSrc;
+const riskStart = contentSrc2.indexOf('const ACTION_RISK = {');
+const riskEnd = contentSrc2.indexOf('};', riskStart);
+const riskBlock = riskStart === -1 ? '' : contentSrc2.slice(riskStart, riskEnd);
+// לא מניחים סדר בין הפונקציות בקובץ: חותכים מתחילת describeAction ועד
+// הפונקציה הבאה, ולא עד פונקציה שעשויה לשבת לפניה.
+const dStart = contentSrc2.indexOf('function describeAction');
+const dNext = contentSrc2.indexOf(String.fromCharCode(10) + '  function ', dStart + 10);
+const describeBlock = dStart === -1 ? '' :
+  contentSrc2.slice(dStart, dNext === -1 ? dStart + 4000 : dNext);
+
+for (const action of serverActions) {
+  check(action + ' has a risk tier', riskBlock.includes(action + ':'));
+  check(action + ' has a human description', describeBlock.includes("case '" + action + "'"));
+}
+
+console.log('');
 console.log('================================================');
 console.log('  ' + pass + ' passed, ' + fail + ' failed');
 if (fail) {

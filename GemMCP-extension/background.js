@@ -3,9 +3,74 @@
  * מטפל ב-Supabase, GitHub, Notion, Web Fetching, ו-Custom MCP
  */
 
+
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name.startsWith('inject_prompt_')) {
+    const data = await chrome.storage.local.get(alarm.name);
+    const promptText = data[alarm.name];
+    if (promptText) {
+      const tabs = await chrome.tabs.query({ url: "https://gemini.google.com/*" });
+      if (tabs.length > 0) {
+        chrome.tabs.sendMessage(tabs[0].id, { type: 'INJECT_PROMPT', text: promptText }).catch(()=>{});
+      }
+      chrome.storage.local.remove(alarm.name);
+    }
+  }
+});
+
 chrome.runtime.onInstalled.addListener(() => {
   console.log('[GemMCP] Extension installed & background service worker active');
+  
+  chrome.contextMenus.create({
+    id: "send-to-gemmcp",
+    title: "שלח ל-GemMCP",
+    contexts: ["selection", "page", "image"]
+  });
 });
+
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  if (info.menuItemId === "send-to-gemmcp") {
+    let content = info.selectionText || info.srcUrl || info.pageUrl;
+    if (!content) return;
+    
+    const promptText = `בבקשה נתח/שמור את התוכן הבא מהרשת:\n\n${content}`;
+    
+    // Find Gemini tab
+    const tabs = await chrome.tabs.query({ url: "https://gemini.google.com/*" });
+    let geminiTabId = null;
+    if (tabs.length > 0) {
+      geminiTabId = tabs[0].id;
+      await chrome.tabs.update(geminiTabId, { active: true });
+    } else {
+      const newTab = await chrome.tabs.create({ url: "https://gemini.google.com/app" });
+      geminiTabId = newTab.id;
+      // Wait for tab to load before sending message
+      await new Promise(r => setTimeout(r, 4000));
+    }
+    
+    chrome.tabs.sendMessage(geminiTabId, { type: 'INJECT_PROMPT', text: promptText }).catch(err => {
+      console.warn("Could not inject prompt directly", err);
+    });
+  }
+});
+
+
+async function saveAuditLog(service, action, requestPayload, responsePayload) {
+  try {
+    const data = await chrome.storage.local.get({ audit_logs: [] });
+    const logs = data.audit_logs;
+    logs.unshift({
+      timestamp: Date.now(),
+      service,
+      action,
+      request: requestPayload,
+      response: responsePayload
+    });
+    // Keep only last 50
+    if (logs.length > 50) logs.length = 50;
+    await chrome.storage.local.set({ audit_logs: logs });
+  } catch(e) {}
+}
 
 const NOTION_CLIENT_ID = '3bcd872b-594c-811c-8b80-0037d2a8c87a';
 const NOTION_REDIRECT_URI = 'http://localhost:3000/oauth/callback';
@@ -525,7 +590,8 @@ async function discoverSupabaseProjects(token) {
 function normalizeServiceName(service) {
   if (!service) return '';
   const s = String(service).toLowerCase().trim();
-  if (['filesystem', 'fs', 'files', 'file', 'os', 'windows', 'system', 'cmd', 'powershell', 'shell', 'bash'].includes(s)) return 'windows';
+  if (s === 'windows_extra') return 'windows_extra';
+    if (['filesystem', 'fs', 'files', 'file', 'os', 'windows', 'system', 'cmd', 'powershell', 'shell', 'bash'].includes(s)) return 'windows';
   if (['web', 'fetch', 'scraper', 'crawl', 'crawler', 'browser', 'http'].includes(s)) return 'fetch';
   if (['db', 'database', 'postgres', 'postgresql', 'sql', 'supabase'].includes(s)) return 'supabase';
   if (['git', 'github', 'repo'].includes(s)) return 'github';
@@ -541,7 +607,7 @@ async function handleOmniToolExecution(service, toolCall, config) {
   const srv = normalizeServiceName(service);
   const isActive = srv === 'custom' || srv.startsWith('custom_')
     ? (activeServices.includes('custom') || activeServices.some(s => s.startsWith('custom_')))
-    : activeServices.includes(srv);
+    : (srv === 'windows_extra' ? activeServices.includes('windows') : activeServices.includes(srv));
 
   if (!isActive) {
     throw new Error(`השירות [${service}] מנוטרל בהגדרות התוסף ולא יבוצע.`);
@@ -549,6 +615,8 @@ async function handleOmniToolExecution(service, toolCall, config) {
 
   switch (srv) {
     case 'windows':
+      return await executeWindowsMcp(toolCall, config);
+    case 'windows_extra':
       return await executeWindowsMcp(toolCall, config);
     case 'supabase':
       return await executeSupabase(toolCall, config);
@@ -627,7 +695,7 @@ async function executeWindowsMcp(toolCall, config) {
     }
   };
 
-  async function tryFetchOnce(timeoutMs = 4000) {
+  async function tryFetchOnce(timeoutMs = 25000) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -659,7 +727,7 @@ async function executeWindowsMcp(toolCall, config) {
 
   // 1. ניסיון פנייה ראשוני
   try {
-    return await tryFetchOnce(3500);
+    return await tryFetchOnce(25000);
   } catch (initialErr) {
     const isNetworkError = initialErr.name === 'AbortError' ||
       (initialErr.message && (initialErr.message.includes('Failed to fetch') || initialErr.message.includes('NetworkError')));
@@ -700,7 +768,7 @@ async function executeWindowsMcp(toolCall, config) {
     // 4. ניסיון ביצוע חוזר לאחר שהשרת התעורר
     if (serverReady) {
       console.log('[GemMCP Background] שרת ה-Bridge עלה בהצלחה! מבצע כעת את הפקודה המבוקשת...');
-      return await tryFetchOnce(4000);
+      return await tryFetchOnce(25000);
     }
 
     throw new Error('שרת ה-Bridge לא היה פעיל. נשלחה פקודת הפעלה אוטומטית, וודא שאישרת או שהרצת register-protocol.bat.');
@@ -1098,7 +1166,20 @@ async function executeFetch(toolCall) {
   }
 
   // 2. ברירת מחדל: שליפת HTTP רגילה (לדפים ציבוריים שאינם פתוחים כרטיסייה)
-  if (!targetUrl) throw new Error('חסרה כתובת URL או כרטיסייה פתוחה לסריקה');
+  if (!targetUrl) throw new Error('חובה לספק URL או כותרת חלון לחיפוש');
+
+  // SSRF Protection
+  try {
+    const urlObj = new URL(targetUrl);
+    const host = urlObj.hostname.toLowerCase();
+    if (host === '127.0.0.1' || host === 'localhost' || host === '::1' || host.startsWith('169.254.') || host.startsWith('192.168.') || host.startsWith('10.')) {
+      throw new Error('אבטחה: הגישה לכתובות רשת פנימיות דרך Web Fetch נחסמה (SSRF Protection).');
+    }
+  } catch (e) {
+    if (e.message.includes('אבטחה:')) throw e;
+    // URL parsing failed, assume it's invalid or missing protocol
+    if (!targetUrl.startsWith('http')) targetUrl = 'https://' + targetUrl;
+  }
 
   const res = await fetch(targetUrl, {
     headers: {

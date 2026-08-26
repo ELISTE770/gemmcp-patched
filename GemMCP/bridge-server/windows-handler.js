@@ -36,6 +36,11 @@ async function handleWindowsExecute(req, res, deps) {
       // 1. קריאת קובץ
       
       case 'media_control': {
+        // שליטה במדיה מריצה PowerShell. קודם לא הייתה כאן שום בדיקת הרשאה -
+        // כלומר הפעולה רצה גם כשכל ההרשאות כבויות. אומת בהרצה.
+        if (!perms.launchApps) {
+          return res.status(403).json({ success: false, error: 'הרשאת שליטה בתוכנות (WIN_PERM_APPS) כבויה בשרת.' });
+        }
         const cmd = params.command;
         let psCode = '';
         if (cmd === 'mute') psCode = '$obj = new-object -com wscript.shell; $obj.SendKeys([char]173)';
@@ -48,7 +53,9 @@ async function handleWindowsExecute(req, res, deps) {
         if (!psCode) return res.status(400).json({ success: false, error: 'Unknown media command' });
         
         return new Promise((resolve) => {
-          execFile('powershell.exe', ['-NoProfile', '-Command', psCode], (error) => {
+          execFile('powershell.exe',
+            ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', psCode],
+            { timeout: 10000, windowsHide: true }, (error) => {
             if (error) resolve(res.json({ success: false, error: error.message }));
             else resolve(res.json({ success: true, data: { message: 'פקודת המדיה נשלחה בהצלחה.' } }));
           });
@@ -56,13 +63,20 @@ async function handleWindowsExecute(req, res, deps) {
       }
       
       case 'manage_windows': {
+        // אותו פער: הרצת PowerShell בלי בדיקת הרשאה. 'list' גם מונה את כל
+        // החלונות הפתוחים על שמותיהם, שזו חשיפת מידע על מה שהמשתמש עושה.
+        if (!perms.launchApps) {
+          return res.status(403).json({ success: false, error: 'הרשאת שליטה בתוכנות (WIN_PERM_APPS) כבויה בשרת.' });
+        }
         const cmd = params.command;
         const appName = params.app_name;
         
         if (cmd === 'list') {
           const psCode = `Get-Process | Where-Object { $_.MainWindowTitle -and $_.MainWindowTitle.Trim().Length -gt 0 } | Select-Object -Property Id, ProcessName, MainWindowTitle | ConvertTo-Json`;
           return new Promise((resolve) => {
-            execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', psCode], (error, stdout) => {
+            execFile('powershell.exe',
+              ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', psCode],
+              { timeout: 15000, windowsHide: true }, (error, stdout) => {
               if (error) {
                 resolve(res.json({ success: false, error: error.message }));
               } else {
@@ -71,41 +85,59 @@ async function handleWindowsExecute(req, res, deps) {
                   const list = Array.isArray(parsed) ? parsed : [parsed];
                   resolve(res.json({ success: true, data: { open_windows: list } }));
                 } catch (e) {
-                  resolve(res.json({ success: true, data: { raw_output: stdout.trim() } }));
+                  // stdout עשוי להיות undefined כשהפקודה לא הדפיסה דבר, ואז
+                  // .trim() היה זורק בתוך ה-catch ומשאיר את הבקשה תלויה.
+                  resolve(res.json({ success: true, data: { raw_output: String(stdout || '').trim() } }));
                 }
               }
             });
           });
         
         
+        
+        
+        
         } else if (cmd === 'focus' && appName) {
           const psCode = `
-Add-Type -AssemblyName Microsoft.VisualBasic
-Add-Type -AssemblyName System.Windows.Forms
-$proc = Get-Process | Where-Object { $_.MainWindowTitle -match "${appName}" -or $_.ProcessName -match "${appName}" } | Select-Object -First 1
+$target = [regex]::Escape($env:GEMMCP_TARGET)
+$proc = Get-Process | Where-Object { 
+    ($_.MainWindowTitle -and $_.MainWindowTitle -match $target) -or
+    ($_.ProcessName -and $_.ProcessName -match $target)
+} | Select-Object -First 1
+
 if (-not $proc) {
-    Write-Error "No process found matching '${appName}'"
+    Write-Error "No window found matching the requested name."
     exit 1
 }
 
-# Try AppActivate with PID (extremely reliable and instant)
-$activated = [Microsoft.VisualBasic.Interaction]::AppActivate($proc.Id)
-if (-not $activated) {
-    $wshell = New-Object -ComObject WScript.Shell
+$wshell = New-Object -ComObject WScript.Shell
+
+# 1. Activate window by PID or Title
+$activated = $wshell.AppActivate($proc.Id)
+if (-not $activated -and $proc.MainWindowTitle) {
     $activated = $wshell.AppActivate($proc.MainWindowTitle)
 }
 
-if ($activated) {
-    Write-Output "Success"
-} else {
-    Write-Error "Failed to bring window to front"
-    exit 1
-}
+# 2. Restore if minimized (Alt + Space, R)
+Start-Sleep -Milliseconds 50
+$wshell.SendKeys('% r')
+
+# 3. Final focus
+Start-Sleep -Milliseconds 50
+$wshell.AppActivate($proc.Id)
+
+Write-Output "Focused."
 `;
           return new Promise((resolve) => {
-            execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', psCode], (error, stdout, stderr) => {
+            execFile('powershell.exe',
+              ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', psCode],
+              { timeout: 15000, windowsHide: true, env: { ...process.env, GEMMCP_TARGET: String(appName) } },
+              (error, stdout, stderr) => {
               if (error || (stderr && stderr.includes('Error'))) {
-                resolve(res.json({ success: false, error: stderr || error.message || 'Window not found' }));
+                // לא מחזירים את stderr הגולמי: הוא כלל את קוד ה-PowerShell שנוצר,
+                // כולל מה שנשלח כפרמטר. הפירוט נשאר בצד השרת.
+                console.warn('[manage_windows focus]', stderr || (error && error.message));
+                resolve(res.json({ success: false, error: `לא נמצא חלון פעיל שתואם ל-'${appName}'.` }));
               } else {
                 resolve(res.json({ success: true, data: { message: `חלון ${appName} הוקפץ בהצלחה לקדמת המסך!` } }));
               }

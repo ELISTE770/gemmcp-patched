@@ -9,10 +9,11 @@
     "activeTab",
     "identity",
     "tabs",
-    "scripting"
+    "scripting",
+    "alarms",
+    "contextMenus"
   ],
   "host_permissions": [
-    "<all_urls>",
     "https://gemini.google.com/*",
     "http://127.0.0.1:3000/*",
     "http://localhost:3000/*",

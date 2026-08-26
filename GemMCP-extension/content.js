@@ -6,6 +6,32 @@
 (function () {
   console.log('%c[GemMCP] 🚀 GemMCP Hub פעיל ומוכן על Gemini!', 'color: #3b82f6; font-weight: bold; font-size: 14px;');
 
+  function showToast(message, type = 'info') {
+    let container = document.getElementById('gemmcp-toast-container');
+    if (!container) {
+      container = document.createElement('div');
+      container.id = 'gemmcp-toast-container';
+      container.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:999999;display:flex;flex-direction:column;gap:10px;pointer-events:none;';
+      document.body.appendChild(container);
+    }
+    const toast = document.createElement('div');
+    const colors = { error: '#ef4444', success: '#22c55e', info: '#3b82f6' };
+    toast.style.cssText = `background:${colors[type] || colors.info};color:white;padding:12px 20px;border-radius:8px;font-family:sans-serif;font-size:14px;box-shadow:0 4px 6px rgba(0,0,0,0.1);opacity:0;transition:opacity 0.3s ease, transform 0.3s ease;transform:translateY(20px);pointer-events:auto;max-width:300px;line-height:1.4;`;
+    toast.textContent = message;
+    container.appendChild(toast);
+    
+    requestAnimationFrame(() => {
+      toast.style.opacity = '1';
+      toast.style.transform = 'translateY(0)';
+    });
+    
+    setTimeout(() => {
+      toast.style.opacity = '0';
+      toast.style.transform = 'translateY(20px)';
+      setTimeout(() => toast.remove(), 300);
+    }, 4000);
+  }
+
   // ברירת מחדל בטוחה: דורש אישור. במקור זה היה true, כך שכל אובדן של המפתח
   // autoExecute מ-chrome.storage (למשל הסרה והוספה מחדש של התוסף) החזיר בשקט
   // הרצה אוטומטית ללא אישור.
@@ -132,6 +158,30 @@
       window.__gemmcp_current_lang = lang;
     });
   }
+
+  
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.type === 'INJECT_PROMPT') {
+    // הטקסט כאן מגיע מבחירה בדף אקראי דרך תפריט ההקשר, כלומר הוא קלט לא
+    // מהימן. קודם הוא נכתב דרך innerHTML, ואז סימון בתוך הטקסט נפרס כ-HTML
+    // בתוך הדף של ג'מיני. בנוסף innerHTML אינו מסנכרן את המודל של Angular,
+    // ולכן השליחה נכשלה בשקט - בדיוק מה ש-setComposerText קיים בשבילו.
+    const chatEditor = findGeminiInputField();
+    if (chatEditor) {
+      const target = (chatEditor.tagName && chatEditor.tagName.toLowerCase() === 'rich-textarea')
+        ? (chatEditor.querySelector('div[contenteditable="true"]') || chatEditor)
+        : chatEditor;
+      setComposerText(target, String(request.text || ''));
+      target.focus();
+      showToast('התוכן הוכנס בהצלחה לשיחה', 'success');
+      sendResponse({success: true});
+    } else {
+      showToast('לא נמצאה תיבת טקסט', 'error');
+      sendResponse({success: false});
+    }
+    return true;
+  }
+});
 
   function createFloatingUI() {
     if (document.getElementById('omni-mcp-floating-widget')) return;
@@ -765,11 +815,12 @@
   async function ensureWindowsBridgeRunning() {
     if (!activeServices.includes('windows')) return;
     try {
-      const controller = new AbortController();
-      const tId = setTimeout(() => controller.abort(), 1200);
-      const res = await fetch('http://127.0.0.1:3000/api/health', { signal: controller.signal });
-      clearTimeout(tId);
-      if (res.ok) return;
+      // דרך ה-service worker ולא fetch מהדף: מדיניות Local Network Access
+      // חוסמת גישה מהקשר הדף ל-localhost, ולכן הבדיקה כאן נכשלה תמיד והפעילה
+      // את מפעיל הפרוטוקול בכל הפעלה - גם כשהשרת כבר רץ.
+      const state = await chrome.runtime.sendMessage({ action: 'GET_BRIDGE_AUTH_STATE' });
+      if (state && state.reachable) return;
+      triggerBridgeStartupProtocol();
     } catch (e) {
       triggerBridgeStartupProtocol();
     }
@@ -1067,7 +1118,10 @@
 
   let scanDebounceTimer = null;
 
+  let isObserving = false;
   function observeGeminiResponses() {
+    if (isObserving) return;
+    isObserving = true;
     const observer = new MutationObserver(() => {
       clearTimeout(scanDebounceTimer);
       // ממתינים חצי שנייה של שקט (Debounce) כדי שג'מיני יסיים להזרים את הטקסט/JSON
@@ -1465,6 +1519,11 @@
     make_dir:        { level: 'warn',    label: 'יצירת תיקייה',       icon: '📁' },
     find_files:      { level: 'safe',    label: 'חיפוש קבצים',        icon: '🔍' },
     open_app:        { level: 'safe',    label: 'פתיחת תוכנה',        icon: '🚀' },
+    media_control:   { level: 'safe',    label: 'שליטה בנגן',          icon: '🎵' },
+    // דורש אישור ולא רץ אוטומטית: רשימת החלונות מגלה כותרות של מסמכים, מיילים
+    // וכתובות פרטיות, והתוצאה נשלחת לג'מיני - כלומר החוצה. אין לה גם שום תיחום
+    // לתיקייה מותרת, בניגוד ל-list_directory.
+    manage_windows:  { level: 'warn',    label: 'חלונות פתוחים',       icon: '🪟' },
     read_file:       { level: 'safe',    label: 'קריאת קובץ',         icon: '📄' },
     list_directory:  { level: 'safe',    label: 'סריקת תיקייה',       icon: '📂' },
     clipboard_read:  { level: 'safe',    label: 'קריאת הלוח',         icon: '📋' },
@@ -1526,6 +1585,10 @@
     const action = String(toolCall.action || toolCall.tool_name || '').replace(/^[a-z]+:/, '');
     switch (action) {
       case 'open_app':        return `לפתוח את התוכנה "${t(toolCall.app_name)}"`;
+      case 'media_control':   return `לשלוח פקודת מדיה: ${t(toolCall.command)}`;
+      case 'manage_windows':  return toolCall.command === 'focus'
+                                ? `להביא לקדמת המסך את "${t(toolCall.app_name)}"`
+                                : 'לקבל את רשימת החלונות הפתוחים';
       case 'find_files':      return `לחפש "${t(toolCall.pattern)}" תחת ${t(toolCall.path)}`;
       case 'make_dir':        return `ליצור את התיקייה ${t(toolCall.path)}`;
       case 'copy_file':       return `להעתיק ${t(toolCall.from)} אל ${t(toolCall.to)}`;
@@ -1732,7 +1795,7 @@
         isExecuting = false;
         setBadgeBusy(false);
       }
-    }, 6000);
+    }, 35000);
 
     addLog(`מבצע שירות [${service}]...`);
 
@@ -2295,16 +2358,7 @@
     }
   });
 
-  window.addEventListener('load', () => {
-    createFloatingUI();
-    observeGeminiResponses();
-    attachUserIntentInterceptor();
-    initMentionPopup();
-    attachMentionListeners();
-    setTimeout(showOnboardingMentionHintIfNeeded, 1200);
-  });
-
-  if (document.readyState === 'complete' || document.readyState === 'interactive') {
+  function initExtension() {
     createFloatingUI();
     observeGeminiResponses();
     attachUserIntentInterceptor();
@@ -2312,5 +2366,12 @@
     attachMentionListeners();
     setTimeout(showOnboardingMentionHintIfNeeded, 1200);
   }
+
+  if (document.readyState === 'complete' || document.readyState === 'interactive') {
+    initExtension();
+  } else {
+    window.addEventListener('load', initExtension);
+  }
 })();
+
 

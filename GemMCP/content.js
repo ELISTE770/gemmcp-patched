@@ -16,7 +16,7 @@
     }
     const toast = document.createElement('div');
     const colors = { error: '#ef4444', success: '#22c55e', info: '#3b82f6' };
-    toast.style.cssText = `background:\${colors[type] || colors.info};color:white;padding:12px 20px;border-radius:8px;font-family:sans-serif;font-size:14px;box-shadow:0 4px 6px rgba(0,0,0,0.1);opacity:0;transition:opacity 0.3s ease, transform 0.3s ease;transform:translateY(20px);pointer-events:auto;max-width:300px;line-height:1.4;`;
+    toast.style.cssText = `background:${colors[type] || colors.info};color:white;padding:12px 20px;border-radius:8px;font-family:sans-serif;font-size:14px;box-shadow:0 4px 6px rgba(0,0,0,0.1);opacity:0;transition:opacity 0.3s ease, transform 0.3s ease;transform:translateY(20px);pointer-events:auto;max-width:300px;line-height:1.4;`;
     toast.textContent = message;
     container.appendChild(toast);
     
@@ -162,15 +162,17 @@
   
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.type === 'INJECT_PROMPT') {
-    const chatEditor = document.querySelector('rich-textarea') || document.querySelector('textarea, [contenteditable="true"]');
+    // הטקסט כאן מגיע מבחירה בדף אקראי דרך תפריט ההקשר, כלומר הוא קלט לא
+    // מהימן. קודם הוא נכתב דרך innerHTML, ואז סימון בתוך הטקסט נפרס כ-HTML
+    // בתוך הדף של ג'מיני. בנוסף innerHTML אינו מסנכרן את המודל של Angular,
+    // ולכן השליחה נכשלה בשקט - בדיוק מה ש-setComposerText קיים בשבילו.
+    const chatEditor = findGeminiInputField();
     if (chatEditor) {
-      if (chatEditor.tagName.toLowerCase() === 'rich-textarea' || chatEditor.contentEditable === 'true') {
-        chatEditor.innerHTML = '<p>' + request.text + '</p>';
-      } else {
-        chatEditor.value = request.text;
-      }
-      chatEditor.dispatchEvent(new Event('input', { bubbles: true }));
-      chatEditor.focus();
+      const target = (chatEditor.tagName && chatEditor.tagName.toLowerCase() === 'rich-textarea')
+        ? (chatEditor.querySelector('div[contenteditable="true"]') || chatEditor)
+        : chatEditor;
+      setComposerText(target, String(request.text || ''));
+      target.focus();
       showToast('התוכן הוכנס בהצלחה לשיחה', 'success');
       sendResponse({success: true});
     } else {
@@ -813,11 +815,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   async function ensureWindowsBridgeRunning() {
     if (!activeServices.includes('windows')) return;
     try {
-      const controller = new AbortController();
-      const tId = setTimeout(() => controller.abort(), 1200);
-      const res = await fetch('http://127.0.0.1:3000/api/health', { signal: controller.signal });
-      clearTimeout(tId);
-      if (res.ok) return;
+      // דרך ה-service worker ולא fetch מהדף: מדיניות Local Network Access
+      // חוסמת גישה מהקשר הדף ל-localhost, ולכן הבדיקה כאן נכשלה תמיד והפעילה
+      // את מפעיל הפרוטוקול בכל הפעלה - גם כשהשרת כבר רץ.
+      const state = await chrome.runtime.sendMessage({ action: 'GET_BRIDGE_AUTH_STATE' });
+      if (state && state.reachable) return;
+      triggerBridgeStartupProtocol();
     } catch (e) {
       triggerBridgeStartupProtocol();
     }
@@ -1115,7 +1118,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   let scanDebounceTimer = null;
 
+  let isObserving = false;
   function observeGeminiResponses() {
+    if (isObserving) return;
+    isObserving = true;
     const observer = new MutationObserver(() => {
       clearTimeout(scanDebounceTimer);
       // ממתינים חצי שנייה של שקט (Debounce) כדי שג'מיני יסיים להזרים את הטקסט/JSON
@@ -1513,6 +1519,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     make_dir:        { level: 'warn',    label: 'יצירת תיקייה',       icon: '📁' },
     find_files:      { level: 'safe',    label: 'חיפוש קבצים',        icon: '🔍' },
     open_app:        { level: 'safe',    label: 'פתיחת תוכנה',        icon: '🚀' },
+    media_control:   { level: 'safe',    label: 'שליטה בנגן',          icon: '🎵' },
+    // דורש אישור ולא רץ אוטומטית: רשימת החלונות מגלה כותרות של מסמכים, מיילים
+    // וכתובות פרטיות, והתוצאה נשלחת לג'מיני - כלומר החוצה. אין לה גם שום תיחום
+    // לתיקייה מותרת, בניגוד ל-list_directory.
+    manage_windows:  { level: 'warn',    label: 'חלונות פתוחים',       icon: '🪟' },
     read_file:       { level: 'safe',    label: 'קריאת קובץ',         icon: '📄' },
     list_directory:  { level: 'safe',    label: 'סריקת תיקייה',       icon: '📂' },
     clipboard_read:  { level: 'safe',    label: 'קריאת הלוח',         icon: '📋' },
@@ -1574,6 +1585,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const action = String(toolCall.action || toolCall.tool_name || '').replace(/^[a-z]+:/, '');
     switch (action) {
       case 'open_app':        return `לפתוח את התוכנה "${t(toolCall.app_name)}"`;
+      case 'media_control':   return `לשלוח פקודת מדיה: ${t(toolCall.command)}`;
+      case 'manage_windows':  return toolCall.command === 'focus'
+                                ? `להביא לקדמת המסך את "${t(toolCall.app_name)}"`
+                                : 'לקבל את רשימת החלונות הפתוחים';
       case 'find_files':      return `לחפש "${t(toolCall.pattern)}" תחת ${t(toolCall.path)}`;
       case 'make_dir':        return `ליצור את התיקייה ${t(toolCall.path)}`;
       case 'copy_file':       return `להעתיק ${t(toolCall.from)} אל ${t(toolCall.to)}`;
@@ -2343,22 +2358,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
   });
 
-  window.addEventListener('load', () => {
+  function initExtension() {
     createFloatingUI();
     observeGeminiResponses();
     attachUserIntentInterceptor();
     initMentionPopup();
     attachMentionListeners();
     setTimeout(showOnboardingMentionHintIfNeeded, 1200);
-  });
+  }
 
   if (document.readyState === 'complete' || document.readyState === 'interactive') {
-    createFloatingUI();
-    observeGeminiResponses();
-    attachUserIntentInterceptor();
-    initMentionPopup();
-    attachMentionListeners();
-    setTimeout(showOnboardingMentionHintIfNeeded, 1200);
+    initExtension();
+  } else {
+    window.addEventListener('load', initExtension);
   }
 })();
 
