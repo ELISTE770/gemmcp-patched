@@ -86,6 +86,10 @@
     }
     const autoToggle = document.getElementById('omni-mcp-auto-toggle');
     if (autoToggle) autoToggle.checked = isAutoExecute;
+    // גם כאן, ולא רק בלחיצה ובשינוי אחסון: זה המסלול שרץ כשהדף נטען וההגדרה
+    // כבר דלוקה מקודם. בלעדיו התיבה נראתה מסומנת בזמן שהאזהרה נשארה מוסתרת -
+    // כלומר בדיוק במצב שבו האזהרה הכי נחוצה, היא לא הופיעה.
+    syncAutoRunWarning();
     renderServicesList();
   });
 
