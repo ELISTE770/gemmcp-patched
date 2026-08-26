@@ -29,18 +29,38 @@ function check(name, condition, detail) {
 }
 
 // ---- מה השרת באמת תומך בו ----
-const serverSrc = fs.readFileSync(path.join(ROOT, 'bridge-server', 'server.js'), 'utf8');
-const filesSrc = fs.readFileSync(path.join(ROOT, 'bridge-server', 'actions-files.js'), 'utf8');
+//
+// handleWindowsExecute עבר מ-server.js למודול נפרד, ואז החיפוש כאן לא מצא
+// אותו: הבדיקה המשיכה לעבור בזמן שהיא בדקה חמש פעולות במקום שתים-עשרה.
+// לכן מחפשים בשני המקומות, ונכשלים בקול אם לא נמצא switch בכלל.
+function readIfExists(...parts) {
+  const f = path.join(ROOT, ...parts);
+  return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '';
+}
 
-// ה-case-ים בתוך handleWindowsExecute
-const switchStart = serverSrc.indexOf('async function handleWindowsExecute');
-const fromSwitch = serverSrc.slice(switchStart);
+const handlerSrc = readIfExists('bridge-server', 'windows-handler.js') ||
+                   readIfExists('bridge-server', 'server.js');
+const filesSrc = readIfExists('bridge-server', 'actions-files.js');
+
+const switchStart = handlerSrc.indexOf('function handleWindowsExecute');
+const fromSwitch = switchStart === -1 ? '' : handlerSrc.slice(switchStart);
 const cases = [...fromSwitch.matchAll(/case '([a-z_]+)':/g)].map((m) => m[1]);
 
 // הפעולות שמודול הקבצים מוסיף: מפתחות ברמה העליונה של האובייקט המוחזר
 const fileActions = [...filesSrc.matchAll(/^\s{4}([a-z_]+)\(params\)/gm)].map((m) => m[1]);
 
 const serverActions = [...new Set([...cases, ...fileActions])].sort();
+
+// שומר סף: בדיקה שאיבדה את מקור האמת שלה חייבת ליפול, לא לעבור בשקט על
+// רשימה מקוצצת. הליבה חייבת להימצא תמיד.
+const MUST_FIND = ['read_file', 'write_file', 'list_directory', 'run_command', 'open_app'];
+const missingCore = MUST_FIND.filter((a) => !serverActions.includes(a));
+if (missingCore.length) {
+  console.error('');
+  console.error('  הבדיקה לא מצאה את הפעולות ' + missingCore.join(', ') + ' בקוד השרת.');
+  console.error('  כנראה handleWindowsExecute עבר קובץ - עדכן את הנתיב כאן במקום להתעלם.');
+  process.exit(1);
+}
 
 // ---- מה הפרומפט מפרסם ----
 const promptSrc = fs.readFileSync(path.join(ROOT, 'prompt.js'), 'utf8');

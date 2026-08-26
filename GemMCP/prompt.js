@@ -14,7 +14,8 @@ const OMNI_MCP_REGISTRY = {
     schema: {
       action: 'execute_sql | list_tables | get_schema',
       query: 'שאילתת ה-SQL להרצה'
-    },
+    }
+,
     examples: [
       '{"service": "supabase", "action": "execute_sql", "query": "SELECT table_name FROM information_schema.tables WHERE table_schema = \'public\';"}'
     ]
@@ -29,10 +30,92 @@ const OMNI_MCP_REGISTRY = {
       action: 'search | get_page | create_page',
       query: 'טקסט לחיפוש ב-Notion (מחרוזת ריקה מחזירה את כל הדפים האחרונים)',
       page_id: 'מזהה הדף לקריאה מלאה'
-    },
+    }
+,
     examples: [
       '{"service": "notion", "action": "search", "query": ""}',
       '{"service": "notion", "action": "get_page", "page_id": "PAGE_ID"}'
+    ]
+  },
+  browser: {
+    id: 'browser',
+    name: 'Browser Tools (צילום מסך)',
+    icon: '📸',
+    description: 'מאפשר לצלם את המסך של הכרטיסייה הפעילה בדפדפן (Screenshot).',
+    userIntentMapping: 'אם המשתמש מבקש: "צלם מסך", "איך נראה הדף", "screenshot" - פלוט פקודת JSON עבור שירות browser.',
+    schema: {
+      action: 'take_screenshot'
+    }
+,
+    examples: [
+      '{"service": "browser", "action": "take_screenshot"}'
+    ]
+  }
+,
+  scheduler: {
+    id: 'scheduler',
+    name: 'מנהל תזמונים (Task Scheduler)',
+    icon: '⏳',
+    description: 'מאפשר לך לבקש מהמערכת להעיר אותך בעוד זמן מוגדר על ידי הזרקת פרומפט חדש.',
+    userIntentMapping: 'אם המשתמש מבקש: "תזכיר לי", "תבדוק שוב בעוד X", "schedule" - השתמש בשירות scheduler.',
+    schema: {
+      action: 'schedule_prompt',
+      delay_minutes: 'מספר הדקות להמתנה',
+      prompt_text: 'הטקסט שיוזרק לשיחה לאחר ההמתנה'
+    }
+,
+    examples: [
+      '{"service": "scheduler", "action": "schedule_prompt", "delay_minutes": 5, "prompt_text": "בדוק שוב אם שרת ה-SQL חזר להיות זמין"}'
+    ]
+  }
+,
+  search: {
+    id: 'search',
+    name: 'Web Search (חיפוש מתקדם ברשת)',
+    icon: '🔍',
+    description: 'מבצע חיפוש ברשת האינטרנט ומחזיר כותרות וקישורים עדכניים.',
+    userIntentMapping: 'אם המשתמש מבקש "חפש ברשת", "מה החדשות", או מידע שאין לך - השתמש ב-search.',
+    schema: {
+      action: 'search_web',
+      query: 'מילת החיפוש'
+    }
+,
+    examples: [
+      '{"service": "search", "action": "search_web", "query": "מזג אוויר בתל אביב"}'
+    ]
+  },
+  interact: {
+    id: 'interact',
+    name: 'Browser Interact (שליטה במסך)',
+    icon: '🖱️',
+    description: 'מאפשר הקראה קולית, גלילה של הדף הנוכחי, והדגשת טקסט במסך.',
+    userIntentMapping: 'אם מבקשים "תקריא לי", "תגלול למטה", "תדגיש את המילה" - השתמש ב-interact.',
+    schema: {
+      action: 'speak | scroll | highlight',
+      text: 'טקסט להקראה או להדגשה (אופציונלי)',
+      direction: 'לגלילה: "up" או "down" (אופציונלי)'
+    }
+,
+    examples: [
+      '{"service": "interact", "action": "speak", "text": "בוקר טוב!"}',
+      '{"service": "interact", "action": "scroll", "direction": "down"}'
+    ]
+  },
+  windows_extra: {
+    id: 'windows_extra',
+    name: 'Windows Control (מדיה וחלונות)',
+    icon: '🎛️',
+    description: 'שליטה בווליום, מוזיקה, והקפצה/סגירה של חלונות בווינדוס.',
+    userIntentMapping: 'אם המשתמש מבקש: "תשתיק את המחשב", "תעביר שיר", "תקפיץ את וורד", "מה פתוח" - השתמש ב-windows_extra.',
+    schema: {
+      action: 'media_control | manage_windows',
+      command: 'למדיה: "mute", "unmute", "vol_up", "vol_down", "play_pause", "next". לחלונות: "list", "focus", "close"',
+      app_name: 'רק עבור focus או close: שם התוכנה'
+    }
+,
+    examples: [
+      '{"service": "windows_extra", "action": "media_control", "command": "mute"}',
+      '{"service": "windows_extra", "action": "manage_windows", "command": "focus", "app_name": "notepad"}'
     ]
   },
   windows: {
@@ -48,7 +131,8 @@ const OMNI_MCP_REGISTRY = {
       content: 'תוכן טקסט לכתיבה לקובץ',
       command: 'פקודת PowerShell להרצה',
       text: 'טקסט להעתקה ללוח'
-    },
+    }
+,
     examples: [
       '{"service": "windows", "action": "open_app", "app_name": "calc"}',
       '{"service": "windows", "action": "find_files", "path": "~/Downloads", "pattern": "*.pdf", "limit": 50}',
@@ -73,7 +157,8 @@ const OMNI_MCP_REGISTRY = {
       description: 'תיאור המאגר (אופציונלי)',
       private: 'true / false (האם המאגר פרטי)',
       path: 'נתיב הקובץ במאגר'
-    },
+    }
+,
     examples: [
       '{"service": "github", "action": "create_repo", "name": "my-new-app", "description": "My project", "private": true}',
       '{"service": "github", "action": "list_repos"}',
@@ -89,7 +174,8 @@ const OMNI_MCP_REGISTRY = {
     schema: {
       action: 'get_url',
       url: 'כתובת ה-URL המלאה לקריאה'
-    },
+    }
+,
     examples: [
       '{"service": "fetch", "action": "get_url", "url": "https://example.com"}'
     ]
@@ -104,7 +190,8 @@ const OMNI_MCP_REGISTRY = {
       action: 'custom:call_tool',
       tool_name: 'שם הכלי',
       arguments: {}
-    },
+    }
+,
     examples: [
       '{"service": "custom", "tool_name": "my_tool", "arguments": {}}'
     ]
@@ -129,6 +216,8 @@ const WINDOWS_TOOL_LINES = `Format response strictly as a JSON object for Window
 - open_app:       {"service": "windows", "action": "open_app", "app_name": "<name>"}
 - clipboard_read: {"service": "windows", "action": "clipboard_read"}
 - clipboard_write:{"service": "windows", "action": "clipboard_write", "text": "<text>"}
+- media_control:  {"service": "windows", "action": "media_control", "command": "play_pause|next|prev|vol_up|vol_down|mute"}
+- manage_windows: {"service": "windows", "action": "manage_windows", "command": "list"}   (or "focus" with "app_name")
 - run_command:    {"service": "windows", "action": "run_command", "command": "<powershell_command>"}
 
 PREFER a dedicated action over run_command. Use run_command ONLY when nothing
@@ -188,6 +277,7 @@ function generateOmniSystemPrompt(activeServices = ['supabase', 'notion', 'fetch
   Files:     read_file, write_file, list_directory, find_files
   Managing:  make_dir, copy_file, move_file, delete_file
   Other:     open_app, clipboard_read, clipboard_write, run_command
+  System:    media_control, manage_windows
   PREFER the dedicated action over run_command. Use run_command ONLY when no
   dedicated action fits - it is disabled by default and is the one permission
   the allowed-folder limit cannot contain. To create a folder use make_dir,
@@ -196,6 +286,8 @@ function generateOmniSystemPrompt(activeServices = ['supabase', 'notion', 'fetch
   Example: {"service": "windows", "action": "make_dir", "path": "~/Desktop/Reports"}
   Example: {"service": "windows", "action": "find_files", "path": "~/Desktop", "pattern": "*.pdf"}
   Example: {"service": "windows", "action": "list_directory", "path": "~/Downloads"}
+  Example: {"service": "windows", "action": "media_control", "command": "play_pause"}
+  Example: {"service": "windows", "action": "manage_windows", "command": "list"}
 
   For a task needing several steps, send ONE plan instead of separate commands.
   Name a step with "as", then reference it as $name, $name.field or $name[i].
@@ -238,7 +330,8 @@ function generateOmniSystemPrompt(activeServices = ['supabase', 'notion', 'fetch
       const srvId = cs.id || `custom_${idx + 1}`;
       toolSchemas.push(`- ${cs.name || srvId} (service: "custom", server_id: "${srvId}"):
   Example: {"service": "custom", "server_id": "${srvId}", "tool_name": "...", "arguments": {}}`);
-    });
+    }
+);
   }
 
   return `You are connected to external tool extensions via JSON commands.
@@ -307,6 +400,9 @@ function generateSingleToolPrompt(serviceId, customServerConfig = null, customTo
   const exampleStr = tool && tool.examples ? tool.examples[0] : `{"service": "${serviceId}"}`;
   return `${userPrefix}Format response strictly as JSON: ${exampleStr}`;
 }
+
+
+
 
 
 

@@ -6,6 +6,7 @@ const os = require('os');
 const { exec, execFile } = require('child_process');
 const crypto = require('crypto');
 const { createFileActions } = require('./actions-files');
+const { handleWindowsExecute } = require('./windows-handler');
 const { runPlan, MAX_STEPS } = require('./plan-runner');
 const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
@@ -24,21 +25,19 @@ const rawPort = Number(process.env.PORT);
 const PORT = Number.isInteger(rawPort) && rawPort > 0 ? rawPort : 3000;
 const HOST = '127.0.0.1'; // נעילת שרת ל-localhost בלבד למניעת חשיפה ברשת
 
-// הגדרת CORS מאובטחת - מאשר רק את תוסף הכרום ו-Localhost
+// הגדרת CORS מאובטחת - מאשר רק את תוסף הכרום, Localhost, ו-Gemini
 const corsOptions = {
   origin: (origin, callback) => {
-    // בקשות ללא origin (כגון curl, background service worker) או מתוספי Chrome ומ-localhost
-    // startsWith על 'http://localhost' היה מתאים גם ל-http://localhost.evil.com,
-    // כלומר אתר ציבורי היה מקבל אישור CORS. נדרשת התאמה מדויקת של המארח.
-    if (!origin) return callback(null, true);          // curl / service worker
+    if (!origin) return callback(null, true);
     if (origin.startsWith('chrome-extension://')) return callback(null, true);
+    if (origin === 'https://gemini.google.com') return callback(null, true);
     try {
       const host = new URL(origin).hostname;
       if (host === 'localhost' || host === '127.0.0.1' || host === '[::1]') {
         return callback(null, true);
       }
     } catch (e) { /* origin לא תקין - ייפול לחסימה */ }
-    return callback(new Error('גישה נחסמה מטעמי אבטחה (CORS Policy). הבקשה אינה מגיעה מתוסף מאושר.'));
+    return callback(new Error('גישה נחסמה מטעמי אבטחה (CORS Policy). הבקשה אינה מגיעה ממקור מאושר.'));
   }
 };
 
@@ -532,8 +531,11 @@ const knownFolders = (() => {
   try {
     const regKey = ['HKCU', 'Software', 'Microsoft', 'Windows', 'CurrentVersion',
                     'Explorer', 'User Shell Folders'].join(SEP);
+    // stdio מפורש. כשהשרת עולה דרך המשגר השקט הוא מנותק ובלי קונסולה, ואז
+    // execFileSync שיורש handles נכשל - ה-catch בלע את זה, knownFolders נשאר
+    // ריק, וכל בקשה ל-'~/Desktop' נחסמה. אומת: בחזית עבד, ברקע לא.
     const raw = require('child_process').execFileSync('reg', ['query', regKey],
-      { encoding: 'utf8', timeout: 5000 });
+      { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
 
     for (const line of raw.split(String.fromCharCode(10))) {
       const t = line.trim();
@@ -553,7 +555,22 @@ const knownFolders = (() => {
       if (fs.existsSync(expanded)) out[slot] = expanded;
     }
   } catch (e) {
-    console.warn('⚠️ קריאת תיקיות המערכת מהרישום נכשלה, נופלים לתיקיית הבית:', e.message);
+    console.warn('⚠️ קריאת תיקיות המערכת מהרישום נכשלה:', e.message);
+  }
+
+  // גיבוי כשהרישום לא נקרא: משתני הסביבה של OneDrive. פחות סמכותי מהרישום,
+  // אבל הרבה יותר טוב מתיקיית הבית - שם התיקיות פשוט אינן קיימות במחשב מסונכרן.
+  if (!out.desktop) {
+    for (const base of [process.env.OneDrive, process.env.OneDriveCommercial, os.homedir()]) {
+      if (!base) continue;
+      for (const [slot, folder] of [['desktop', 'Desktop'], ['documents', 'Documents'],
+                                    ['pictures', 'Pictures'], ['downloads', 'Downloads']]) {
+        if (out[slot]) continue;
+        const cand = path.join(base, folder);
+        try { if (fs.existsSync(cand)) out[slot] = cand; } catch (e) { /* לא נגיש */ }
+      }
+    }
+    if (out.desktop) console.warn('   נעשה שימוש בגיבוי: ' + out.desktop);
   }
   return out;
 })();
@@ -735,382 +752,15 @@ function auditLog(action, params, outcome, detail) {
 }
 
 // Endpoint מרכזי לביצוע פעולות Windows MCP
-async function handleWindowsExecute(req, res) {
-  try {
-    const { action, params = {}, permissions = {} } = req.body;
-    const perms = resolvePermissions(permissions);
+// מקור אחד לתלויות של ה-handler. שתי נקודות הקריאה חייבות להעביר בדיוק את
+// אותו אובייקט: כשהחתימה עברה לשלושה פרמטרים עודכנה רק נקודת הקריאה של
+// /execute, ומסלול התוכניות נשאר על החתימה הישנה - כך שכל תוכנית נפלה על
+// "Cannot destructure property 'resolvePermissions' of 'deps'".
+const windowsDeps = {
+  resolvePermissions, auditLog, canonicalise, expandPath, isPathInside, checkDangerousWindowsCommands
+};
 
-    // עוטפים את res כדי שכל תשובה תירשם ביומן בלי לפזר קריאות auditLog
-    const originalJson = res.json.bind(res);
-    let logged = false;
-    res.json = (body) => {
-      if (!logged) {
-        logged = true;
-        auditLog(action, params, body && body.success ? 'success' : 'denied', body && body.error);
-      }
-      return originalJson(body);
-    };
-
-    // בדיקת נתיב מותר (Allowed Directory Scope)
-    function validatePathInScope(targetPath) {
-      if (!targetPath) return;
-      const resolved = canonicalise(path.resolve(expandPath(targetPath)));
-      const ceiling = perms.allowedPath ? canonicalise(perms.allowedPath) : null;
-      if (ceiling && !isPathInside(resolved, ceiling)) {
-        throw new Error(`הגישה לנתיב '${targetPath}' נחסמה. הנתיב המורשה בהגדרות השרת הוא: ${perms.allowedPath}`);
-      }
-      return resolved;
-    }
-
-    switch (action) {
-      // 1. קריאת קובץ
-      case 'read_file': {
-        if (!perms.readFiles) {
-          return res.status(403).json({ success: false, error: 'הרשאת קריאת קבצים (WIN_PERM_READ) כבויה בשרת.' });
-        }
-        if (!params.path) {
-          return res.status(400).json({ success: false, error: 'חסר פרמטר path של הקובץ לקריאה' });
-        }
-        const filePath = validatePathInScope(params.path);
-        if (!fs.existsSync(filePath)) {
-          return res.status(404).json({ success: false, error: `הקובץ אינו קיים: ${params.path}` });
-        }
-        const content = fs.readFileSync(filePath, 'utf8');
-
-        // חלון קריאה נשלט במקום חיתוך קבוע ב-50k. קובץ גדול נקרא בקטעים
-        // רצופים במקום להיחתך בשקט באמצע.
-        const rfOffset = Math.max(0, Number(params.offset) || 0);
-        const rfLimit = Math.min(Math.max(1, Number(params.limit) || 50000), 200000);
-        const slice = content.slice(rfOffset, rfOffset + rfLimit);
-
-        return res.json({
-          success: true,
-          data: {
-            path: params.path,
-            totalChars: content.length,
-            offset: rfOffset,
-            returned: slice.length,
-            hasMore: rfOffset + slice.length < content.length,
-            content: slice
-          }
-        });
-      }
-
-      // 2. רשימת קבצים בתיקייה
-      case 'list_directory': {
-        if (!perms.readFiles) {
-          return res.status(403).json({ success: false, error: 'הרשאת קריאת קבצים ותיקיות (WIN_PERM_READ) כבויה בשרת.' });
-        }
-        const dirPath = validatePathInScope(params.path || perms.allowedPath || process.cwd());
-        if (!fs.existsSync(dirPath)) {
-          return res.status(404).json({ success: false, error: `התיקייה אינה קיימת: ${params.path}` });
-        }
-        const all = fs.readdirSync(dirPath, { withFileTypes: true }).map(item => ({
-          name: item.name,
-          type: item.isDirectory() ? 'directory' : 'file',
-          path: path.join(dirPath, item.name)
-        }));
-
-        // עימוד במקום חיתוך שקט. קודם הוחזרו 100 פריטים בלי שום סימן שיש עוד,
-        // כך שהמודל עבד על תמונה חלקית בלי לדעת את זה.
-        const lsOffset = Math.max(0, Number(params.offset) || 0);
-        const lsLimit = Math.min(Math.max(1, Number(params.limit) || 200), 1000);
-        const lsPage = all.slice(lsOffset, lsOffset + lsLimit);
-
-        return res.json({
-          success: true,
-          data: {
-            directory: dirPath,
-            total: all.length,
-            offset: lsOffset,
-            limit: lsLimit,
-            returned: lsPage.length,
-            hasMore: lsOffset + lsPage.length < all.length,
-            items: lsPage
-          }
-        });
-      }
-
-      // 3. כתיבה או יצירת קובץ
-      case 'write_file': {
-        if (!perms.writeFiles) {
-          return res.status(403).json({ success: false, error: 'הרשאת כתיבת ועריכת קבצים כבויה בהגדרות התוסף או השרת.' });
-        }
-        if (!params.path || typeof params.content !== 'string') {
-          return res.status(400).json({ success: false, error: 'חסרים פרמטרי path או content לכתיבה' });
-        }
-        const filePath = validatePathInScope(params.path);
-        const dir = path.dirname(filePath);
-        if (!fs.existsSync(dir)) {
-          fs.mkdirSync(dir, { recursive: true });
-        }
-        fs.writeFileSync(filePath, params.content, 'utf8');
-        return res.json({ success: true, data: { message: `הקובץ נשמר בהצלחה בנתיב: ${filePath}`, bytes: Buffer.byteLength(params.content, 'utf8') } });
-      }
-
-      // 4. הרצת פקודת PowerShell / CMD
-      case 'run_command': {
-        if (!perms.runCommands) {
-          return res.status(403).json({ success: false, error: 'הרשאת הרצת פקודות מערכת כבויה בהגדרות התוסף או השרת.' });
-        }
-        if (!params.command) {
-          return res.status(400).json({ success: false, error: 'חסר פרמטר command להרצה' });
-        }
-        checkDangerousWindowsCommands(params.command);
-
-        const cwd = perms.allowedPath || process.cwd();
-        // execFile ולא exec: Node לא פותח shell שמפרסר את המחרוזת בעצמו.
-        // -NoProfile קריטי - בלעדיו PowerShell טוען את הפרופיל של המשתמש לפני
-        // כל פקודה, כך שכל מי שיכול לכתוב לקובץ הפרופיל מריץ קוד בכל קריאה.
-        execFile('powershell.exe',
-          ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', params.command],
-          { cwd, timeout: 30000, maxBuffer: 1024 * 1024 * 5 }, (error, stdout, stderr) => {
-          if (error) {
-            return res.json({
-              success: false,
-              error: error.message,
-              stderr: stderr ? stderr.toString() : null,
-              stdout: stdout ? stdout.toString() : null
-            });
-          }
-          return res.json({
-            success: true,
-            data: {
-              stdout: (stdout || '').toString().slice(0, 30000),
-              stderr: (stderr || '').toString().slice(0, 10000),
-              cwd: cwd
-            }
-          });
-        });
-        return;
-      }
-
-      // 5. פתיחת אפליקציה
-      case 'open_app': {
-        if (!perms.launchApps) {
-          return res.status(403).json({ success: false, error: 'הרשאת הפעלת תוכנות (WIN_PERM_APPS) כבויה בשרת.' });
-        }
-        if (!params.app_name && !params.path) {
-          return res.status(400).json({ success: false, error: 'חסר שם אפליקציה או נתיב להרצה (app_name)' });
-        }
-        
-        let appTarget = (params.path || params.app_name || '').trim();
-        const appLow = appTarget.toLowerCase().replace(/['"״]/g, '');
-
-        const appAliases = {
-          // AI & Chat
-          'claude': 'claude',
-          'קלוד': 'claude',
-          'chatgpt': 'chatgpt',
-          'gpt': 'chatgpt',
-          'גפט': 'chatgpt',
-          // Productivity & Code
-          'vscode': 'code',
-          'code': 'code',
-          'קוד': 'code',
-          'cursor': 'cursor',
-          'קראוסר': 'cursor',
-          'visual studio': 'devenv',
-          'notepad': 'notepad',
-          'פנקס רשימות': 'notepad',
-          'word': 'winword',
-          'וורד': 'winword',
-          'winword': 'winword',
-          'excel': 'excel',
-          'אקסל': 'excel',
-          'powerpoint': 'powerpnt',
-          'פאוורפוינט': 'powerpnt',
-          'notion': 'notion:',
-          'נושן': 'notion:',
-          'figma': 'figma:',
-          'פיגמה': 'figma:',
-          // Communication
-          'whatsapp': 'whatsapp:',
-          'ווטסאפ': 'whatsapp:',
-          'וואטסאפ': 'whatsapp:',
-          'telegram': 'telegram:',
-          'טלגרם': 'telegram:',
-          'discord': 'discord:',
-          'דיסקורד': 'discord:',
-          'slack': 'slack:',
-          'סלאק': 'slack:',
-          'teams': 'msteams:',
-          'טימס': 'msteams:',
-          // Media & Utilities
-          'spotify': 'spotify:',
-          'ספוטיפיי': 'spotify:',
-          'calc': 'calculator:',
-          'calculator': 'calculator:',
-          'מחשבון': 'calculator:',
-          'paint': 'mspaint',
-          'צייר': 'mspaint',
-          'camera': 'microsoft.windows.camera:',
-          'מצלמה': 'microsoft.windows.camera:',
-          'explorer': 'explorer',
-          'סייר הקבצים': 'explorer',
-          'settings': 'ms-settings:',
-          'הגדרות': 'ms-settings:',
-          'clock': 'ms-clock:',
-          'שעון': 'ms-clock:',
-          'store': 'ms-windows-store:',
-          'חנות': 'ms-windows-store:',
-          'taskmgr': 'taskmgr',
-          'מנהל המשימות': 'taskmgr',
-          'cmd': 'cmd',
-          'powershell': 'powershell',
-          'terminal': 'wt',
-          'טרמינל': 'wt',
-          // Browsers
-          'chrome': 'chrome',
-          'כרום': 'chrome',
-          'edge': 'msedge',
-          'אדג': 'msedge',
-          'brave': 'brave',
-          'firefox': 'firefox'
-        };
-
-        let targetToRun = appAliases[appLow] || appTarget;
-
-        // הרצה ישירה דרך cmd /c start המקפיצה מיד כל פרוטוקול/תוכנה בשולחן העבודה
-        const targetCommand = targetToRun.includes(':') 
-          ? `start "" "${targetToRun}"` 
-          : `start "" ${targetToRun}`;
-
-        // start מחזירה תמיד קוד יציאה 0, ולכן היא אינה עדות לכך שמשהו באמת נפתח.
-        // גרוע מכך - יעד שאינו קיים תוקע את cmd בהמתנה לדיאלוג שגיאה, והבקשה
-        // לעולם לא חוזרת בעוד תהליך cmd נשאר תלוי. לכן בודקים מראש שהיעד קיים,
-        // ומגבילים כל הרצה בזמן כרשת ביטחון.
-        const LAUNCH_TIMEOUT_MS = 5000;
-
-        const reportLaunched = () =>
-          res.json({ success: true, data: { message: `היישום '${appTarget}' הופעל בהצלחה ב-Windows!` } });
-
-        // היעד מגיע בסופו של דבר מפלט של מודל, ולכן חייב לעבור אימות תווים לפני
-        // שהוא נוגע ב-cmd. תו כמו & או | היה הופך פתיחת תוכנה להרצת פקודה שרירותית.
-        const SAFE_EXE = /^[A-Za-z0-9._-]+$/;
-        const SAFE_URI = /^[A-Za-z][A-Za-z0-9.+-]*:[^"'`|&;<>^%\r\n]*$/;
-        if (!SAFE_EXE.test(targetToRun) && !SAFE_URI.test(targetToRun)) {
-          return res.status(400).json({
-            success: false,
-            error: `שם היישום '${appTarget}' מכיל תווים שאינם מורשים.`
-          });
-        }
-
-        const launchTarget = () => {
-          // execFile ולא exec - הארגומנטים מועברים כמערך ואינם עוברים פירוש shell
-          execFile('cmd.exe', ['/c', 'start', '', targetToRun],
-            { windowsHide: false, timeout: LAUNCH_TIMEOUT_MS, killSignal: 'SIGKILL' }, (cmdErr) => {
-            if (!cmdErr) {
-              return reportLaunched();
-            }
-
-            if (cmdErr.killed) {
-              return res.status(504).json({
-                success: false,
-                error: `פתיחת '${appTarget}' לא הסתיימה בזמן ובוטלה. ייתכן שממתין לך דיאלוג על המסך.`
-              });
-            }
-
-            // Fallback ל-PowerShell במידה ו-cmd start נכשל
-            execFile('powershell.exe',
-              ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', `Start-Process "${targetToRun}"`],
-              { timeout: LAUNCH_TIMEOUT_MS, killSignal: 'SIGKILL' },
-              (psErr) => {
-                if (psErr) {
-                  const reason = psErr.killed ? 'היעד לא הגיב בזמן' : psErr.message;
-                  return res.status(500).json({ success: false, error: `שגיאה בפתיחת ${appTarget}: ${reason}` });
-                }
-                return reportLaunched();
-              });
-          });
-        };
-
-        if (targetToRun.includes(':')) {
-          // פרוטוקול: קיים רק אם ה-scheme רשום ב-Registry
-          const scheme = targetToRun.split(':')[0];
-          execFile('reg.exe', ['query', `HKCR\\${scheme}`, '/ve'], { timeout: LAUNCH_TIMEOUT_MS }, (regErr) => {
-            if (regErr) {
-              return res.status(404).json({
-                success: false,
-                error: `היישום '${appTarget}' אינו מותקן במחשב (הפרוטוקול '${scheme}:' אינו רשום).`
-              });
-            }
-            launchTarget();
-          });
-        } else {
-          // קובץ הרצה: קיים רק אם where.exe מוצא אותו ב-PATH
-          execFile('where.exe', [targetToRun], { timeout: LAUNCH_TIMEOUT_MS }, (whereErr) => {
-            if (whereErr) {
-              return res.status(404).json({
-                success: false,
-                error: `היישום '${appTarget}' לא נמצא במחשב ('${targetToRun}' אינו קיים ב-PATH).`
-              });
-            }
-            launchTarget();
-          });
-        }
-        return;
-      }
-
-      // 6. פעולות קבצים נוספות: העתקה, העברה, מחיקה לסל, יצירת תיקייה, חיפוש
-      case 'make_dir':
-      case 'copy_file':
-      case 'move_file':
-      case 'delete_file':
-      case 'find_files': {
-        const fileActions = createFileActions({ validatePathInScope, perms });
-        try {
-          const data = await fileActions[action](params);
-          return res.json({ success: true, data });
-        } catch (e) {
-          return res.status(e.status || 500).json({ success: false, error: e.message });
-        }
-      }
-
-      // 7. קריאה או כתיבה ללוח (Clipboard)
-      case 'clipboard_read': {
-        if (!perms.clipboard) {
-          return res.status(403).json({ success: false, error: 'הרשאת גישה ללוח (WIN_PERM_CLIPBOARD) כבויה בשרת.' });
-        }
-        execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Get-Clipboard'], (error, stdout) => {
-          if (error) {
-            return res.status(500).json({ success: false, error: error.message });
-          }
-          return res.json({ success: true, data: { clipboard_content: (stdout || '').trim() } });
-        });
-        return;
-      }
-
-      case 'clipboard_write': {
-        if (!perms.clipboard) {
-          return res.status(403).json({ success: false, error: 'הרשאת גישה ללוח (WIN_PERM_CLIPBOARD) כבויה בשרת.' });
-        }
-        const textToCopy = params.text || '';
-        const child = execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '$input | Set-Clipboard'], (error) => {
-          if (error) {
-            return res.status(500).json({ success: false, error: error.message });
-          }
-          return res.json({ success: true, data: { message: 'הטקסט הועתק ללוח של Windows בהצלחה!' } });
-        });
-        if (child.stdin) {
-          child.stdin.end(textToCopy, 'utf8');
-        }
-        return;
-      }
-
-      default:
-        return res.status(400).json({
-          success: false,
-          error: `פעולה לא מוכרת ב-Windows MCP: '${action}'. פעולות אפשריות: read_file, write_file, list_directory, run_command, open_app, clipboard_read, clipboard_write.`
-        });
-    }
-  } catch (err) {
-    console.error('[Windows MCP Error]:', err.message);
-    res.status(500).json({ success: false, error: err.message });
-  }
-}
-
-app.post('/api/windows/execute', handleWindowsExecute);
+app.post('/api/windows/execute', (req, res) => handleWindowsExecute(req, res, windowsDeps));
 
 // ---------------------------------------------------------------------------
 // הרצת תוכנית: רצף פעולות עם העברת ערכים ביניהן.
@@ -1193,7 +843,7 @@ app.post('/api/windows/plan', async (req, res) => {
           resolve(body.data);
         }
       };
-      Promise.resolve(handleWindowsExecute({ body: { action, params, permissions } }, fakeRes))
+      Promise.resolve(handleWindowsExecute({ body: { action, params, permissions } }, fakeRes, windowsDeps))
         .catch(reject);
     });
   }
@@ -1230,6 +880,9 @@ app.get('/api/health', (req, res) => {
     bridge: 'GemMCP-Gemini-Bridge',
     platform: process.platform,
     protocol: PROTOCOL_VERSION,
+    // אילו תיקיות מערכת נפתרו בפועל. כשהפענוח נכשל בשקט, כל בקשה ל-'~/Desktop'
+    // נחסמה ולא היה שום סימן למה - עכשיו זה נראה מיד מ-/api/health.
+    knownFolders,
     authRequired: AUTH_REQUIRED,
     authenticated: AUTH_REQUIRED ? authenticated : true,
     permissions: {

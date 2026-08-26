@@ -6,6 +6,32 @@
 (function () {
   console.log('%c[GemMCP] 🚀 GemMCP Hub פעיל ומוכן על Gemini!', 'color: #3b82f6; font-weight: bold; font-size: 14px;');
 
+  function showToast(message, type = 'info') {
+    let container = document.getElementById('gemmcp-toast-container');
+    if (!container) {
+      container = document.createElement('div');
+      container.id = 'gemmcp-toast-container';
+      container.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:999999;display:flex;flex-direction:column;gap:10px;pointer-events:none;';
+      document.body.appendChild(container);
+    }
+    const toast = document.createElement('div');
+    const colors = { error: '#ef4444', success: '#22c55e', info: '#3b82f6' };
+    toast.style.cssText = `background:\${colors[type] || colors.info};color:white;padding:12px 20px;border-radius:8px;font-family:sans-serif;font-size:14px;box-shadow:0 4px 6px rgba(0,0,0,0.1);opacity:0;transition:opacity 0.3s ease, transform 0.3s ease;transform:translateY(20px);pointer-events:auto;max-width:300px;line-height:1.4;`;
+    toast.textContent = message;
+    container.appendChild(toast);
+    
+    requestAnimationFrame(() => {
+      toast.style.opacity = '1';
+      toast.style.transform = 'translateY(0)';
+    });
+    
+    setTimeout(() => {
+      toast.style.opacity = '0';
+      toast.style.transform = 'translateY(20px)';
+      setTimeout(() => toast.remove(), 300);
+    }, 4000);
+  }
+
   // ברירת מחדל בטוחה: דורש אישור. במקור זה היה true, כך שכל אובדן של המפתח
   // autoExecute מ-chrome.storage (למשל הסרה והוספה מחדש של התוסף) החזיר בשקט
   // הרצה אוטומטית ללא אישור.
@@ -132,6 +158,28 @@
       window.__gemmcp_current_lang = lang;
     });
   }
+
+  
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.type === 'INJECT_PROMPT') {
+    const chatEditor = document.querySelector('rich-textarea') || document.querySelector('textarea, [contenteditable="true"]');
+    if (chatEditor) {
+      if (chatEditor.tagName.toLowerCase() === 'rich-textarea' || chatEditor.contentEditable === 'true') {
+        chatEditor.innerHTML = '<p>' + request.text + '</p>';
+      } else {
+        chatEditor.value = request.text;
+      }
+      chatEditor.dispatchEvent(new Event('input', { bubbles: true }));
+      chatEditor.focus();
+      showToast('התוכן הוכנס בהצלחה לשיחה', 'success');
+      sendResponse({success: true});
+    } else {
+      showToast('לא נמצאה תיבת טקסט', 'error');
+      sendResponse({success: false});
+    }
+    return true;
+  }
+});
 
   function createFloatingUI() {
     if (document.getElementById('omni-mcp-floating-widget')) return;
@@ -1732,7 +1780,7 @@
         isExecuting = false;
         setBadgeBusy(false);
       }
-    }, 6000);
+    }, 35000);
 
     addLog(`מבצע שירות [${service}]...`);
 
@@ -2313,4 +2361,5 @@
     setTimeout(showOnboardingMentionHintIfNeeded, 1200);
   }
 })();
+
 
