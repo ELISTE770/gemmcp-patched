@@ -36,8 +36,8 @@
   // autoExecute מ-chrome.storage (למשל הסרה והוספה מחדש של התוסף) החזיר בשקט
   // הרצה אוטומטית ללא אישור.
   let isAutoExecute = false;
-  // היקף ההרצה האוטומטית: 'read' מריץ רק פעולות קריאה, 'changes' מריץ גם
-  // פעולות שמשנות משהו. פעולות מסוכנות ותוכניות דורשות אישור בשני המצבים.
+  // היקף ההרצה האוטומטית: 'read' מריץ רק פעולות קריאה ועוצר על כל השאר,
+  // 'all' מריץ הכל בלי לשאול. התקרה בשרת ותיחום התיקייה נאכפים בשני המצבים.
   let autoRunScope = 'read';
   // ברירת המחדל היא השירותים שעובדים ללא שום הגדרה. supabase היה בברירת
   // המחדל למרות שהוא דורש URL ומפתח, בעוד windows - היחיד שעובד מיד - היה
@@ -87,7 +87,7 @@
     } else {
       isAutoExecute = false;
     }
-    autoRunScope = data.autoRunScope === 'changes' ? 'changes' : 'read';
+    autoRunScope = data.autoRunScope === 'all' ? 'all' : 'read';
     const scopeSel = document.getElementById('omni-mcp-auto-scope');
     if (scopeSel) scopeSel.value = autoRunScope;
     const autoToggle = document.getElementById('omni-mcp-auto-toggle');
@@ -117,7 +117,7 @@
     }
 
     if (changes.autoRunScope) {
-      autoRunScope = changes.autoRunScope.newValue === 'changes' ? 'changes' : 'read';
+      autoRunScope = changes.autoRunScope.newValue === 'all' ? 'all' : 'read';
       syncAutoRunWarning();
     }
 
@@ -268,7 +268,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               style="flex:1; font-size:11.5px; padding:4px 6px; border-radius:6px;
                      border:1px solid #334155; background:#0f172a; color:#e2e8f0;">
               <option value="read">בטוח - רק פעולות קריאה רצות לבד</option>
-              <option value="changes">אוטונומי - גם פעולות שמשנות</option>
+              <option value="all">אוטונומי - הכל רץ לבד, בלי לשאול</option>
             </select>
           </div>
 
@@ -816,9 +816,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const txt = el.querySelector('span:last-child');
       // הטקסט חייב לתאר את המצב שנבחר בפועל, אחרת האזהרה מבטיחה הגנה שאינה קיימת.
       if (txt) {
-        txt.textContent = autoRunScope === 'changes'
-          ? 'הרצה אוטומטית במצב אוטונומי. גם פעולות שמשנות קבצים או יוצרות דברים ' +
-            'ירוצו בלי לשאול אותך. הרצת פקודות, מחיקה, כתיבה לקובץ ותוכניות עדיין דורשות אישור.'
+        txt.textContent = autoRunScope === 'all'
+          ? 'מצב אוטונומי. הכל ירוץ בלי לשאול אותך - כולל הרצת פקודות, מחיקה, ' +
+            'כתיבה לקבצים ותוכניות מרובות שלבים. מה שעדיין מגביל הוא רק השרת: ' +
+            'ההרשאות ב-.env והתיקייה המורשית.'
           : 'הרצה אוטומטית דלוקה במצב בטוח. רק פעולות קריאה ירוצו בלי לשאול אותך. ' +
             'כל פעולה שמשנה משהו עדיין דורשת אישור.';
       }
@@ -838,10 +839,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (!sel) return;
     sel.value = autoRunScope;
     sel.addEventListener('change', () => {
-      autoRunScope = sel.value === 'changes' ? 'changes' : 'read';
+      autoRunScope = sel.value === 'all' ? 'all' : 'read';
       chrome.storage.sync.set({ autoRunScope });
       syncAutoRunWarning();
-      addLog(`היקף ההרצה האוטומטית: ${autoRunScope === 'changes' ? 'אוטונומי' : 'בטוח'}`);
+      addLog(`היקף ההרצה האוטומטית: ${autoRunScope === 'all' ? 'אוטונומי' : 'בטוח'}`);
     });
   }
 
@@ -1118,6 +1119,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
       }
       if (!target) return;
+      if (location.pathname !== startedInChat) return;
 
       setComposerText(target, text);
     }
@@ -1126,6 +1128,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     injectText();
 
     let attempts = 0;
+    // הצ'אט שבו הלולאה נפתחה. ג'מיני הוא אפליקציית עמוד יחיד, ולכן מעבר לשיחה
+    // אחרת לא טוען מחדש את הסקריפט והאינטרוול שורד. בלי העוגן הזה, לולאה
+    // שנמשכת עד 90 שניות המשיכה להזריק לתוך הקומפוזר של השיחה החדשה - כלומר
+    // הפרומפט הופיע בצ'אט שבו המשתמש כלל לא הפעיל אותו.
+    const startedInChat = location.pathname;
     // האם כבר ניסינו לשלוח. בלי זה, פעימה שרואה תיבה ריקה אחרי שליחה מוצלחת
     // מפרשת את ההצלחה ככישלון ומזריקה את כל הפרומפט מחדש.
     let sendAttempted = false;
@@ -1137,6 +1144,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     function attemptSend() {
       attempts++;
+
+      // עברו שיחה - הלולאה הזו כבר לא שייכת למסך שהמשתמש רואה.
+      if (location.pathname !== startedInChat) {
+        if (activeSendInterval) {
+          clearInterval(activeSendInterval);
+          activeSendInterval = null;
+        }
+        addLog('השיחה הוחלפה - השליחה הממתינה בוטלה.');
+        return;
+      }
 
       // 1. בדיקה אם ג'מיני עדיין מייצר/מזרים את התשובה הנוכחית.
       //    ההמתנה חסומה בזמן: ה-return כאן קודם לבדיקת maxAttempts שבהמשך, ולכן
@@ -1722,23 +1739,24 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   function requiresExplicitApproval(service, toolCall) {
-    // תוכנית תמיד עוברת אישור: היא מבצעת כמה פעולות ברצף, וזה בדיוק המקרה
-    // שבו המשתמש צריך לראות מה עומד לקרות לפני שזה קורה.
+    const scope = (typeof autoRunScope !== 'undefined') ? autoRunScope : 'read';
+
+    // מצב אוטונומי: שום דבר אינו נעצר לאישור, כולל הרצת פקודות, מחיקה
+    // ותוכניות. זו בחירה מפורשת של המשתמש, מאחורי מתג שכבוי כברירת מחדל.
+    //
+    // מה שממשיך להגן כאן אינו הכרטיס אלא השרת: תקרת ההרשאות ב-.env ותיחום
+    // הנתיב נאכפים בכל בקשה ואינם מושפעים מהמצב הזה כלל. כלומר גם כאן פעולה
+    // לא תצא מהתיקייה המורשית, ולא תריץ פקודות אם ההרשאה כבויה בשרת.
+    if (scope === 'all') return false;
+
+    // תוכנית תמיד עוברת אישור במצב הבטוח: היא מבצעת כמה פעולות ברצף, וזה
+    // בדיוק המקרה שבו כדאי לראות מה עומד לקרות לפני שזה קורה.
     if (Array.isArray(toolCall.plan) && toolCall.plan.length) return true;
 
     const risk = classifyAction(toolCall);
-    const level = risk.level;
-
-    // פעולה מסוכנת תמיד עוברת אישור, בכל מצב. וכך גם פעולה שאינה מוכרת: אם
-    // אין לנו סיווג עבורה, אין לנו בסיס להחליט שהיא בטוחה.
-    if (level === 'danger' || risk.unknown) return true;
-    if (level === 'safe') return false;
-
-    // דרג 'שינוי' תלוי במצב שהמשתמש בחר. במצב הבטוח הוא עובר אישור: אחרת
-    // copy_file כותב לדיסק ו-create_repo / create_issue יוצרים דברים ציבוריים
-    // ב-GitHub בלי שנשאלת. במצב האוטונומי הוא רץ מיד.
-    const scope = (typeof autoRunScope !== 'undefined') ? autoRunScope : 'read';
-    return scope !== 'changes';
+    // פעולה שאינה מוכרת: אין סיווג, ולכן אין בסיס להחליט שהיא בטוחה.
+    if (risk.unknown) return true;
+    return risk.level !== 'safe';
   }
 
   // תיאור הפעולה בשפה אנושית, כדי שלא יהיה צריך לקרוא JSON כדי להחליט

@@ -123,19 +123,20 @@ check('safe mode: a change-tier action asks',
 check('safe mode: a read still runs on its own',
       requiresExplicitApproval('windows', { action: 'read_file' }) === false);
 
-globalThis.autoRunScope = 'changes';
-check('autonomous mode: a change-tier action runs on its own',
+globalThis.autoRunScope = 'all';
+// מצב אוטונומי לפי בקשה מפורשת: שום דבר אינו נעצר לאישור. מה שממשיך להגן
+// אינו הכרטיס אלא השרת - תקרת ההרשאות ותיחום הנתיב, שנבדקים בחבילות האחרות
+// ואינם מושפעים מהמצב הזה.
+check('autonomous: a change-tier action runs on its own',
       requiresExplicitApproval('windows', { action: 'copy_file' }) === false);
-check('autonomous mode: creating a public repo also runs',
-      requiresExplicitApproval('github', { action: 'create_repo' }) === false);
-check('autonomous mode does NOT loosen the dangerous tier',
-      requiresExplicitApproval('windows', { action: 'run_command' }) === true &&
-      requiresExplicitApproval('windows', { action: 'delete_file' }) === true &&
-      requiresExplicitApproval('windows', { action: 'write_file' }) === true);
-check('autonomous mode does NOT let a plan through',
-      requiresExplicitApproval('windows', { plan: [{ action: 'read_file' }] }) === true);
-check('an unknown action still asks even in autonomous mode',
-      requiresExplicitApproval('windows', { action: 'something_new' }) === true);
+check('autonomous: running a command does not stop to ask',
+      requiresExplicitApproval('windows', { action: 'run_command' }) === false);
+check('autonomous: deleting does not stop to ask',
+      requiresExplicitApproval('windows', { action: 'delete_file' }) === false);
+check('autonomous: a multi-step plan runs too',
+      requiresExplicitApproval('windows', { plan: [{ action: 'delete_file' }] }) === false);
+check('autonomous: an unknown action runs too',
+      requiresExplicitApproval('windows', { action: 'something_new' }) === false);
 
 globalThis.autoRunScope = 'read';   // מחזירים לברירת המחדל
 

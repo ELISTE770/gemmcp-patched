@@ -4,6 +4,25 @@
  */
 
 
+// בחירת לשונית ג'מיני להזרקה.
+//
+// שלושה מקומות בחרו tabs[0] מתוך query - כלומר לשונית שרירותית, לא זו שהמשתמש
+// רואה. מי שפתח כמה שיחות של ג'מיני קיבל את הפרומפט בצ'אט אחר לגמרי.
+// סדר העדיפויות: הפעילה בחלון שבחזית, אחר כך כל פעילה, ורק אז הראשונה.
+async function pickGeminiTab() {
+  const URL_MATCH = 'https://gemini.google.com/*';
+  try {
+    const focused = await chrome.tabs.query({ url: URL_MATCH, active: true, lastFocusedWindow: true });
+    if (focused.length) return focused[0];
+  } catch (e) { /* ממשיכים לאפשרות הבאה */ }
+  try {
+    const active = await chrome.tabs.query({ url: URL_MATCH, active: true });
+    if (active.length) return active[0];
+  } catch (e) { /* ממשיכים */ }
+  const any = await chrome.tabs.query({ url: URL_MATCH });
+  return any[0] || null;
+}
+
 // הזרקת פרומפט מתוזמנת.
 //
 // המאזין הזה היה קיים בלי שום צד שיוצר התראות - alarms.create לא הופיע בשום
@@ -19,17 +38,16 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (!promptText) return;
 
   try {
-    let tabs = await chrome.tabs.query({ url: 'https://gemini.google.com/*' });
+    let tab = await pickGeminiTab();
 
     // אין לשונית פתוחה: פותחים אחת וממתינים שה-content script יעלה. קודם
     // ההתראה נמחקה גם במקרה הזה, כלומר הפרומפט המתוזמן נעלם בלי זכר.
-    if (!tabs.length) {
-      const tab = await chrome.tabs.create({ url: 'https://gemini.google.com/app', active: false });
+    if (!tab) {
+      tab = await chrome.tabs.create({ url: 'https://gemini.google.com/app', active: false });
       await new Promise((r) => setTimeout(r, 6000));
-      tabs = [tab];
     }
 
-    await chrome.tabs.sendMessage(tabs[0].id, { type: 'INJECT_PROMPT', text: promptText });
+    await chrome.tabs.sendMessage(tab.id, { type: 'INJECT_PROMPT', text: promptText });
     await chrome.storage.local.remove(alarm.name);
   } catch (e) {
     // ההזרקה נכשלה - משאירים את הרשומה ומנסים שוב בעוד דקה, במקום לאבד אותה.
@@ -100,10 +118,10 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     const promptText = `בבקשה נתח/שמור את התוכן הבא מהרשת:\n\n${content}`;
     
     // Find Gemini tab
-    const tabs = await chrome.tabs.query({ url: "https://gemini.google.com/*" });
+    const picked = await pickGeminiTab();
     let geminiTabId = null;
-    if (tabs.length > 0) {
-      geminiTabId = tabs[0].id;
+    if (picked) {
+      geminiTabId = picked.id;
       await chrome.tabs.update(geminiTabId, { active: true });
     } else {
       const newTab = await chrome.tabs.create({ url: "https://gemini.google.com/app" });
