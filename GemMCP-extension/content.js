@@ -36,6 +36,9 @@
   // autoExecute מ-chrome.storage (למשל הסרה והוספה מחדש של התוסף) החזיר בשקט
   // הרצה אוטומטית ללא אישור.
   let isAutoExecute = false;
+  // היקף ההרצה האוטומטית: 'read' מריץ רק פעולות קריאה, 'changes' מריץ גם
+  // פעולות שמשנות משהו. פעולות מסוכנות ותוכניות דורשות אישור בשני המצבים.
+  let autoRunScope = 'read';
   // ברירת המחדל היא השירותים שעובדים ללא שום הגדרה. supabase היה בברירת
   // המחדל למרות שהוא דורש URL ומפתח, בעוד windows - היחיד שעובד מיד - היה
   // כבוי, כך שאחרי התקנה נקייה הגשר נראה מנותק בלי סיבה נראית לעין.
@@ -84,6 +87,9 @@
     } else {
       isAutoExecute = false;
     }
+    autoRunScope = data.autoRunScope === 'changes' ? 'changes' : 'read';
+    const scopeSel = document.getElementById('omni-mcp-auto-scope');
+    if (scopeSel) scopeSel.value = autoRunScope;
     const autoToggle = document.getElementById('omni-mcp-auto-toggle');
     if (autoToggle) autoToggle.checked = isAutoExecute;
     // גם כאן, ולא רק בלחיצה ובשינוי אחסון: זה המסלול שרץ כשהדף נטען וההגדרה
@@ -107,6 +113,11 @@
       isAutoExecute = !!changes.autoExecute.newValue;
       const autoToggle = document.getElementById('omni-mcp-auto-toggle');
       if (autoToggle) autoToggle.checked = isAutoExecute;
+      syncAutoRunWarning();
+    }
+
+    if (changes.autoRunScope) {
+      autoRunScope = changes.autoRunScope.newValue === 'changes' ? 'changes' : 'read';
       syncAutoRunWarning();
     }
 
@@ -250,6 +261,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             <input type="checkbox" id="omni-mcp-auto-toggle" ${isAutoExecute ? 'checked' : ''} style="cursor: pointer; transform: scale(1.2);">
           </div>
 
+          <div id="omni-mcp-auto-scope-row" style="display:${isAutoExecute ? 'flex' : 'none'};
+               gap:6px; align-items:center; margin:0 0 6px; font-size:11.5px; color:#cbd5e1;">
+            <span>היקף:</span>
+            <select id="omni-mcp-auto-scope"
+              style="flex:1; font-size:11.5px; padding:4px 6px; border-radius:6px;
+                     border:1px solid #334155; background:#0f172a; color:#e2e8f0;">
+              <option value="read">בטוח - רק פעולות קריאה רצות לבד</option>
+              <option value="changes">אוטונומי - גם פעולות שמשנות</option>
+            </select>
+          </div>
+
           <div id="omni-mcp-autorun-warning"
                style="display:${isAutoExecute ? 'flex' : 'none'}; gap:6px; align-items:flex-start; margin:2px 0 8px; padding:7px 9px;
                       border:1px solid #b45309; background:rgba(180,83,9,.14); border-radius:7px;
@@ -258,6 +280,28 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             <span>הרצה אוטומטית דלוקה. פעולות קריאה ירוצו בלי לשאול אותך.
                   כתיבה, מחיקה והרצת פקודות עדיין דורשות אישור.</span>
           </div>
+
+          <details class="omni-mcp-logs-details" id="omni-mcp-schedule-details">
+            <summary class="omni-mcp-logs-summary">
+              <span class="omni-mcp-logs-arrow">▾</span>
+              <span>תזמון פרומפט</span>
+            </summary>
+            <div style="display:flex; flex-direction:column; gap:6px; margin-top:6px;">
+              <textarea id="omni-mcp-schedule-text" rows="2" placeholder="מה לשלוח לג'מיני"
+                style="width:100%; box-sizing:border-box; resize:vertical; font-size:11.5px; padding:6px;
+                       border-radius:6px; border:1px solid #334155; background:#0f172a; color:#e2e8f0;"></textarea>
+              <div style="display:flex; gap:6px; align-items:center;">
+                <input id="omni-mcp-schedule-min" type="number" min="1" max="43200" value="30"
+                  style="width:74px; font-size:11.5px; padding:5px; border-radius:6px;
+                         border:1px solid #334155; background:#0f172a; color:#e2e8f0;">
+                <span style="font-size:11px; color:#94a3b8;">דקות מעכשיו</span>
+                <span style="flex:1"></span>
+                <button id="omni-mcp-schedule-add" class="omni-mcp-action-btn"
+                  style="font-size:11.5px; padding:5px 12px;">תזמן</button>
+              </div>
+              <div id="omni-mcp-schedule-list" style="display:flex; flex-direction:column; gap:4px;"></div>
+            </div>
+          </details>
 
           <div id="omni-mcp-pending-actions"></div>
 
@@ -296,6 +340,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     logsContainer = document.getElementById('omni-mcp-logs');
     restorePersistedLog();
     wireLogControls();
+    wireScheduleControls();
+    wireScopeControl();
 
     renderServicesList();
     initWidgetPosition(widgetContainer, toggleBtn, dragHeader, panel);
@@ -765,7 +811,108 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const el = document.getElementById('omni-mcp-autorun-warning');
     // משנים display ולא את התכונה hidden: כלל display בסגנון מוטבע גובר על
     // [hidden] של הדפדפן, ואז האזהרה נראתה גם כשההרצה האוטומטית כבויה.
-    if (el) el.style.display = isAutoExecute ? 'flex' : 'none';
+    if (el) {
+      el.style.display = isAutoExecute ? 'flex' : 'none';
+      const txt = el.querySelector('span:last-child');
+      // הטקסט חייב לתאר את המצב שנבחר בפועל, אחרת האזהרה מבטיחה הגנה שאינה קיימת.
+      if (txt) {
+        txt.textContent = autoRunScope === 'changes'
+          ? 'הרצה אוטומטית במצב אוטונומי. גם פעולות שמשנות קבצים או יוצרות דברים ' +
+            'ירוצו בלי לשאול אותך. הרצת פקודות, מחיקה, כתיבה לקובץ ותוכניות עדיין דורשות אישור.'
+          : 'הרצה אוטומטית דלוקה במצב בטוח. רק פעולות קריאה ירוצו בלי לשאול אותך. ' +
+            'כל פעולה שמשנה משהו עדיין דורשת אישור.';
+      }
+    }
+    const row = document.getElementById('omni-mcp-auto-scope-row');
+    if (row) row.style.display = isAutoExecute ? 'flex' : 'none';
+    const sel = document.getElementById('omni-mcp-auto-scope');
+    if (sel && sel.value !== autoRunScope) sel.value = autoRunScope;
+  }
+
+  // תזמון הזרקת פרומפט. הצד שיוצר את ההתראות היה חסר לגמרי, ולכן המאזין
+  // ברקע לא יכול היה לפעול - זה הממשק שמייצר אותן.
+  // הבורר נקשר בבניית הפאנל, ולא רק כשלוחצים על המתג: אחרת הוא לא היה מגיב
+  // כלל כשההרצה האוטומטית כבר הייתה דלוקה מקודם.
+  function wireScopeControl() {
+    const sel = document.getElementById('omni-mcp-auto-scope');
+    if (!sel) return;
+    sel.value = autoRunScope;
+    sel.addEventListener('change', () => {
+      autoRunScope = sel.value === 'changes' ? 'changes' : 'read';
+      chrome.storage.sync.set({ autoRunScope });
+      syncAutoRunWarning();
+      addLog(`היקף ההרצה האוטומטית: ${autoRunScope === 'changes' ? 'אוטונומי' : 'בטוח'}`);
+    });
+  }
+
+  function wireScheduleControls() {
+    const addBtn = document.getElementById('omni-mcp-schedule-add');
+    const details = document.getElementById('omni-mcp-schedule-details');
+    if (!addBtn) return;
+
+    addBtn.addEventListener('click', async () => {
+      const textEl = document.getElementById('omni-mcp-schedule-text');
+      const minEl = document.getElementById('omni-mcp-schedule-min');
+      const text = (textEl && textEl.value || '').trim();
+      if (!text) { addLog('לא הוזן טקסט לתזמון.', { error: true }); return; }
+      try {
+        const res = await chrome.runtime.sendMessage({
+          action: 'SCHEDULE_INJECTION', text, minutes: Number(minEl && minEl.value)
+        });
+        if (!res || !res.success) throw new Error(res && res.error || 'התזמון נכשל.');
+        textEl.value = '';
+        addLog(`תוזמן לשליחה בעוד ${minEl.value} דקות.`);
+        renderScheduleList();
+      } catch (e) {
+        addLog(`תזמון נכשל: ${e.message}`, { error: true });
+      }
+    });
+
+    if (details) details.addEventListener('toggle', () => { if (details.open) renderScheduleList(); });
+  }
+
+  async function renderScheduleList() {
+    const list = document.getElementById('omni-mcp-schedule-list');
+    if (!list) return;
+    let items = [];
+    try {
+      const res = await chrome.runtime.sendMessage({ action: 'LIST_INJECTIONS' });
+      items = (res && res.success && res.data) || [];
+    } catch (e) { /* ה-worker לא זמין */ }
+
+    list.innerHTML = '';
+    if (!items.length) {
+      const empty = document.createElement('div');
+      empty.style.cssText = 'font-size:11px; color:#64748b;';
+      empty.textContent = 'אין תזמונים ממתינים.';
+      list.appendChild(empty);
+      return;
+    }
+
+    for (const it of items) {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex; gap:6px; align-items:center; font-size:11px; color:#cbd5e1;';
+      let when = '';
+      try { when = new Date(it.runAt).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' }); } catch (e) {}
+      const label = document.createElement('span');
+      label.style.cssText = 'flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;';
+      label.textContent = `${when} · ${it.text}`;
+      label.title = it.text;
+      const del = document.createElement('span');
+      del.textContent = '✕';
+      del.style.cssText = 'cursor:pointer; color:#94a3b8;';
+      del.title = 'ביטול';
+      del.addEventListener('click', async () => {
+        try {
+          await chrome.runtime.sendMessage({ action: 'CANCEL_INJECTION', name: it.name });
+          addLog('התזמון בוטל.');
+          renderScheduleList();
+        } catch (e) { addLog(`ביטול נכשל: ${e.message}`, { error: true }); }
+      });
+      row.appendChild(label);
+      row.appendChild(del);
+      list.appendChild(row);
+    }
   }
 
   function wireLogControls() {
@@ -1559,7 +1706,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       };
     }
     const action = String(toolCall.action || toolCall.tool_name || '').replace(/^[a-z]+:/, '');
-    return ACTION_RISK[action] || { level: 'warn', label: action || 'פעולה', icon: '❓' };
+    // פעולה שאינה בטבלה מסומנת ככזו. קודם היא התמזגה בשקט לדרג 'שינוי', ובמצב
+    // האוטונומי זה אומר שפעולה חדשה לגמרי - שאיש לא סיווג ואיש לא יודע מה היא
+    // עושה - הייתה רצה בלי לשאול.
+    return ACTION_RISK[action] || { level: 'warn', label: action || 'פעולה', icon: '❓', unknown: true };
   }
 
   // תיאור אנושי של כל שלב בתוכנית, לפי הסדר
@@ -1576,11 +1726,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // שבו המשתמש צריך לראות מה עומד לקרות לפני שזה קורה.
     if (Array.isArray(toolCall.plan) && toolCall.plan.length) return true;
 
-    // רק פעולות קריאה רצות בלי לשאול. קודם הסף היה 'danger' בלבד, ולכן דרג
-    // 'שינוי' עבר אוטומטית - כלומר copy_file כתב לדיסק, ו-create_repo /
-    // create_issue יצרו דברים ציבוריים ב-GitHub, בלי שנשאלת. פעולה שמשנה
-    // משהו, מקומי או מרוחק, היא בדיוק מה שאישור נועד לו.
-    return classifyAction(toolCall).level !== 'safe';
+    const risk = classifyAction(toolCall);
+    const level = risk.level;
+
+    // פעולה מסוכנת תמיד עוברת אישור, בכל מצב. וכך גם פעולה שאינה מוכרת: אם
+    // אין לנו סיווג עבורה, אין לנו בסיס להחליט שהיא בטוחה.
+    if (level === 'danger' || risk.unknown) return true;
+    if (level === 'safe') return false;
+
+    // דרג 'שינוי' תלוי במצב שהמשתמש בחר. במצב הבטוח הוא עובר אישור: אחרת
+    // copy_file כותב לדיסק ו-create_repo / create_issue יוצרים דברים ציבוריים
+    // ב-GitHub בלי שנשאלת. במצב האוטונומי הוא רץ מיד.
+    const scope = (typeof autoRunScope !== 'undefined') ? autoRunScope : 'read';
+    return scope !== 'changes';
   }
 
   // תיאור הפעולה בשפה אנושית, כדי שלא יהיה צריך לקרוא JSON כדי להחליט

@@ -4,19 +4,83 @@
  */
 
 
+// הזרקת פרומפט מתוזמנת.
+//
+// המאזין הזה היה קיים בלי שום צד שיוצר התראות - alarms.create לא הופיע בשום
+// מקום בקוד - כלומר הפיצ'ר לא יכול היה לפעול. הצד החסר נבנה כאן.
+const SCHEDULE_PREFIX = 'inject_prompt_';
+
 chrome.alarms.onAlarm.addListener(async (alarm) => {
-  if (alarm.name.startsWith('inject_prompt_')) {
-    const data = await chrome.storage.local.get(alarm.name);
-    const promptText = data[alarm.name];
-    if (promptText) {
-      const tabs = await chrome.tabs.query({ url: "https://gemini.google.com/*" });
-      if (tabs.length > 0) {
-        chrome.tabs.sendMessage(tabs[0].id, { type: 'INJECT_PROMPT', text: promptText }).catch(()=>{});
-      }
-      chrome.storage.local.remove(alarm.name);
+  if (!alarm.name.startsWith(SCHEDULE_PREFIX)) return;
+
+  const data = await chrome.storage.local.get(alarm.name);
+  const entry = data[alarm.name];
+  const promptText = typeof entry === 'string' ? entry : (entry && entry.text);
+  if (!promptText) return;
+
+  try {
+    let tabs = await chrome.tabs.query({ url: 'https://gemini.google.com/*' });
+
+    // אין לשונית פתוחה: פותחים אחת וממתינים שה-content script יעלה. קודם
+    // ההתראה נמחקה גם במקרה הזה, כלומר הפרומפט המתוזמן נעלם בלי זכר.
+    if (!tabs.length) {
+      const tab = await chrome.tabs.create({ url: 'https://gemini.google.com/app', active: false });
+      await new Promise((r) => setTimeout(r, 6000));
+      tabs = [tab];
     }
+
+    await chrome.tabs.sendMessage(tabs[0].id, { type: 'INJECT_PROMPT', text: promptText });
+    await chrome.storage.local.remove(alarm.name);
+  } catch (e) {
+    // ההזרקה נכשלה - משאירים את הרשומה ומנסים שוב בעוד דקה, במקום לאבד אותה.
+    console.warn('[GemMCP] הזרקה מתוזמנת נכשלה, מנסה שוב:', e && e.message);
+    chrome.alarms.create(alarm.name, { delayInMinutes: 1 });
   }
 });
+
+// יצירה, רשימה וביטול של הזרקות מתוזמנות. זה הצד שהיה חסר.
+async function scheduleInjection(text, minutes) {
+  const clean = String(text || '').trim();
+  if (!clean) throw new Error('אין טקסט לתזמון.');
+
+  const mins = Number(minutes);
+  if (!Number.isFinite(mins) || mins < 1 || mins > 60 * 24 * 30) {
+    throw new Error('הזמן חייב להיות בין דקה אחת ל-30 יום.');
+  }
+
+  // אין Math.random כאן בכוונה: המזהה נגזר מהזמן וממונה, כדי שיהיה יציב וניתן לניפוי.
+  const store = await chrome.storage.local.get(['scheduleSeq']);
+  const seq = (Number(store.scheduleSeq) || 0) + 1;
+  const name = SCHEDULE_PREFIX + seq;
+  const runAt = Date.now() + mins * 60000;
+
+  await chrome.storage.local.set({
+    scheduleSeq: seq,
+    [name]: { text: clean, runAt, createdAt: Date.now() }
+  });
+  chrome.alarms.create(name, { when: runAt });
+  return { name, runAt };
+}
+
+async function listInjections() {
+  const alarms = await chrome.alarms.getAll();
+  const mine = alarms.filter((a) => a.name.startsWith(SCHEDULE_PREFIX));
+  const store = await chrome.storage.local.get(mine.map((a) => a.name));
+  return mine.map((a) => {
+    const e = store[a.name];
+    return {
+      name: a.name,
+      runAt: a.scheduledTime,
+      text: (typeof e === 'string' ? e : (e && e.text)) || ''
+    };
+  }).sort((x, y) => x.runAt - y.runAt);
+}
+
+async function cancelInjection(name) {
+  if (!String(name || '').startsWith(SCHEDULE_PREFIX)) throw new Error('מזהה לא חוקי.');
+  await chrome.alarms.clear(name);
+  await chrome.storage.local.remove(name);
+}
 
 chrome.runtime.onInstalled.addListener(() => {
   console.log('[GemMCP] Extension installed & background service worker active');
@@ -399,7 +463,37 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
 
+  // התוסף רשאי לקרוא כל דף (Web Fetch), אבל הוראות ביצוע מתקבלות אך ורק
+  // מהלשונית של ג'מיני. הרשאת קריאה רחבה והרשאת פקודה הן שני דברים שונים,
+  // וזו ההפרדה שמחזיקה את זה: מה שקוראים מדף אקראי לעולם אינו פקודה.
+  if (request.action === 'SCHEDULE_INJECTION') {
+    scheduleInjection(request.text, request.minutes)
+      .then((r) => sendResponse({ success: true, data: r }))
+      .catch((e) => sendResponse({ success: false, error: e.message }));
+    return true;
+  }
+
+  if (request.action === 'LIST_INJECTIONS') {
+    listInjections()
+      .then((items) => sendResponse({ success: true, data: items }))
+      .catch((e) => sendResponse({ success: false, error: e.message }));
+    return true;
+  }
+
+  if (request.action === 'CANCEL_INJECTION') {
+    cancelInjection(request.name)
+      .then(() => sendResponse({ success: true }))
+      .catch((e) => sendResponse({ success: false, error: e.message }));
+    return true;
+  }
+
   if (request.action === 'EXECUTE_MCP_TOOL') {
+    const from = sender && sender.tab && sender.tab.url;
+    if (!from || !from.startsWith('https://gemini.google.com/')) {
+      console.warn('[GemMCP] בקשת ביצוע נדחתה. מקור:', from);
+      sendResponse({ success: false, error: 'בקשת ביצוע התקבלה ממקור שאינו הלשונית של ג׳מיני ונדחתה.' });
+      return true;
+    }
     handleOmniToolExecution(request.service, request.toolCall, request.config)
       .then((data) => sendResponse({ success: true, data }))
       .catch((err) => sendResponse({ success: false, error: err.message || err }));

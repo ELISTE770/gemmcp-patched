@@ -111,6 +111,34 @@ check('read-only actions still auto-run',
       requiresExplicitApproval('windows', { action: 'list_directory' }) === false &&
       requiresExplicitApproval('supabase', { action: 'list_tables' }) === false);
 
+// שני מצבי ההרצה האוטומטית. הפונקציה קוראת את autoRunScope מהסביבה, ולכן
+// אפשר להחליף מצב ולבדוק שהמדיניות באמת משתנה - ובעיקר שהדרג המסוכן
+// והתוכניות אינם מושפעים משום מצב.
+console.log('');
+console.log('=== the two auto-run scopes ===');
+
+globalThis.autoRunScope = 'read';
+check('safe mode: a change-tier action asks',
+      requiresExplicitApproval('windows', { action: 'copy_file' }) === true);
+check('safe mode: a read still runs on its own',
+      requiresExplicitApproval('windows', { action: 'read_file' }) === false);
+
+globalThis.autoRunScope = 'changes';
+check('autonomous mode: a change-tier action runs on its own',
+      requiresExplicitApproval('windows', { action: 'copy_file' }) === false);
+check('autonomous mode: creating a public repo also runs',
+      requiresExplicitApproval('github', { action: 'create_repo' }) === false);
+check('autonomous mode does NOT loosen the dangerous tier',
+      requiresExplicitApproval('windows', { action: 'run_command' }) === true &&
+      requiresExplicitApproval('windows', { action: 'delete_file' }) === true &&
+      requiresExplicitApproval('windows', { action: 'write_file' }) === true);
+check('autonomous mode does NOT let a plan through',
+      requiresExplicitApproval('windows', { plan: [{ action: 'read_file' }] }) === true);
+check('an unknown action still asks even in autonomous mode',
+      requiresExplicitApproval('windows', { action: 'something_new' }) === true);
+
+globalThis.autoRunScope = 'read';   // מחזירים לברירת המחדל
+
 console.log('');
 console.log('=== human-readable descriptions ===');
 check('run_command names the shell',

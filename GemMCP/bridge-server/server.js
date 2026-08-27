@@ -30,7 +30,11 @@ const corsOptions = {
   origin: (origin, callback) => {
     if (!origin) return callback(null, true);
     if (origin.startsWith('chrome-extension://')) return callback(null, true);
-    if (origin === 'https://gemini.google.com') return callback(null, true);
+    // הדף של ג'מיני אינו ברשימה בכוונה. מדיניות Local Network Access חוסמת
+    // ממילא גישה מהקשר הדף ל-localhost, ולכן היתר כזה אינו מאפשר שום דבר
+    // שעובד היום - אבל אם המדיניות תשתנה, כל סקריפט שרץ בדף היה מקבל גישה
+    // ישירה לגשר. הפקודות מגיעות דרך ה-service worker, שהמקור שלו הוא
+    // chrome-extension:// ומכוסה בשורה שמעל.
     try {
       const host = new URL(origin).hostname;
       if (host === 'localhost' || host === '127.0.0.1' || host === '[::1]') {
