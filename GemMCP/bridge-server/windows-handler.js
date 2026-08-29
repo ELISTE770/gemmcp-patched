@@ -183,6 +183,17 @@ public class ForceFocus {
         SetForegroundWindow(targetHWnd);
         SwitchToThisWindow(targetHWnd, true);
 
+        // אם עד כאן לא הצליח, מנסים מזעור ושחזור. שחזור מחלון ממוזער הוא
+        // מסלול שהמערכת מתירה גם לתהליך רקע, בניגוד ל-SetForegroundWindow.
+        // לא נוגעים ב-SPI_SETFOREGROUNDLOCKTIMEOUT: זו הגדרת מערכת של
+        // המשתמש, ואין זה מקומו של הכלי הזה לשנות אותה בשקט.
+        if (GetForegroundWindow() != targetHWnd) {
+            ShowWindow(targetHWnd, 6);   // SW_MINIMIZE
+            System.Threading.Thread.Sleep(120);
+            ShowWindow(targetHWnd, 9);   // SW_RESTORE
+            SetForegroundWindow(targetHWnd);
+        }
+
         if (foreThread != curThread) {
             AttachThreadInput(curThread, foreThread, false);
         }
