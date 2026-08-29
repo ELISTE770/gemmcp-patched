@@ -4,6 +4,27 @@ const path = require('path');
 const { exec, execFile } = require('child_process');
 const { createFileActions } = require('./actions-files');
 
+// בדיקה קצרה בתהליך נפרד: איזה תהליך מחזיק כרגע את החלון שבחזית, ומי ההורה
+// שלו. מריצים אותה רק אחרי שסקריפט המיקוד הסתיים, כי כל עוד הוא חי המצב
+// שהוא רואה אינו המצב שנשאר על המסך.
+const FOREGROUND_PROBE = `
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class GemFg {
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+}
+"@
+$p = 0
+[void][GemFg]::GetWindowThreadProcessId([GemFg]::GetForegroundWindow(), [ref]$p)
+$parent = 0
+if ($p -ne 0) {
+  try { $parent = (Get-CimInstance Win32_Process -Filter "ProcessId=$p").ParentProcessId } catch { }
+}
+Write-Output "GEMMCP_FRONT $p $parent"
+`;
+
 async function handleWindowsExecute(req, res, deps) {
   const { resolvePermissions, auditLog, canonicalise, expandPath, isPathInside, checkDangerousWindowsCommands } = deps;
   try {
@@ -123,6 +144,23 @@ public class ForceFocus {
     [DllImport("user32.dll")]
     public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, int dwExtraInfo);
 
+    // זו ה-API ש-Alt+Tab משתמש בה. היא מצליחה מתהליך רקע במקרים שבהם
+    // SetForegroundWindow נדחית, ולכן היא מנוסה בנוסף ולא במקום.
+    [DllImport("user32.dll")]
+    public static extern void SwitchToThisWindow(IntPtr hWnd, bool altTab);
+
+    // בדיקה אמיתית: החלון שבחזית שייך לאותו תהליך כמו היעד. חלון ראשי של
+    // אפליקציה מודרנית לרוב אינו החלון שמקבל מיקוד בפועל - וואטסאפ, למשל,
+    // מציג WebView2 שהוא תהליך אחר. השוואת מזהי חלון בלבד החזירה שקר.
+    public static uint PidOfForeground() {
+        uint pid = 0;
+        GetWindowThreadProcessIdOut(GetForegroundWindow(), out pid);
+        return pid;
+    }
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowThreadProcessId")]
+    public static extern uint GetWindowThreadProcessIdOut(IntPtr hWnd, out uint pid);
+
     public static void ForceForeground(IntPtr targetHWnd) {
         if (targetHWnd == IntPtr.Zero) return;
 
@@ -143,6 +181,7 @@ public class ForceFocus {
 
         BringWindowToTop(targetHWnd);
         SetForegroundWindow(targetHWnd);
+        SwitchToThisWindow(targetHWnd, true);
 
         if (foreThread != curThread) {
             AttachThreadInput(curThread, foreThread, false);
@@ -152,10 +191,30 @@ public class ForceFocus {
 "@
 
 $target = [regex]::Escape($env:GEMMCP_TARGET)
-$proc = Get-Process | Where-Object { 
-    ($_.MainWindowTitle -and $_.MainWindowTitle -match $target) -or
-    ($_.ProcessName -and $_.ProcessName -match $target)
-} | Select-Object -First 1
+
+# בחירת המועמד הנכון, ולא הראשון שנתקלים בו.
+#
+# אומת: הבקשה ל'whatsapp' התאימה לשלושה תהליכים - msedgewebview2 שכותרתו
+# "WhatsApp", WhatsApp.Root בלי חלון כלל, ו-WhatsApp.Root עם החלון האמיתי.
+# Select-Object -First 1 בחר את תהליך ה-renderer, שאין לו חלון אפליקציה
+# להעלות. הפעולה דיווחה הצלחה ועל המסך לא קרה כלום.
+#
+# לכן: קודם מסננים למי שיש חלון ראשי בכלל, ואז מעדיפים התאמה בשם התהליך
+# על פני התאמה בכותרת - כותרת יכולה להופיע גם בלשונית של דפדפן.
+$candidates = Get-Process | Where-Object {
+    $_.MainWindowHandle -ne 0 -and (
+        ($_.MainWindowTitle -and $_.MainWindowTitle -match $target) -or
+        ($_.ProcessName -and $_.ProcessName -match $target)
+    )
+}
+
+$proc = $candidates | Sort-Object @{
+    Expression = {
+        if ($_.ProcessName -ieq $env:GEMMCP_TARGET) { 0 }
+        elseif ($_.ProcessName -match $target) { 1 }
+        else { 2 }
+    }
+}, @{ Expression = { $_.WorkingSet64 }; Descending = $true } | Select-Object -First 1
 
 if (-not $proc) {
     Write-Error "No window found matching the requested name."
@@ -175,12 +234,26 @@ if ($hWnd -ne [IntPtr]::Zero) {
 # בודקים מה באמת קרה, ולא מניחים. Windows מסרב להעביר חלון לחזית מתהליך
 # שאינו כבר בחזית, והגשר רץ מנותק - כך ש-SetForegroundWindow נכשל בשקט,
 # הסקריפט הסתיים בהצלחה, ודווח למשתמש "הוקפץ בהצלחה" בזמן ששום דבר לא זז.
-Start-Sleep -Milliseconds 350
-if ([ForceFocus]::GetForegroundWindow() -eq $hWnd) {
-    Write-Output "GEMMCP_FOCUS_OK $($proc.ProcessName)"
-} else {
-    Write-Output "GEMMCP_FOCUS_REFUSED $($proc.ProcessName)"
-}
+#
+# שתי טעויות היו בבדיקה הראשונה שכתבתי, ושתיהן החזירו הצלחה שקרית:
+# 1. השוואת מזהה חלון. אפליקציה מודרנית ממקדת חלון של תהליך אחר - וואטסאפ
+#    מציג WebView2 - ולכן משווים את שרשרת התהליכים ולא מזהה בודד.
+# 2. דגימה אחת 350 מילישניות אחרי. מערכת ההפעלה מחזירה לפעמים את המיקוד
+#    מיד אחרי, ואז הדגימה תפסה רגע חולף. עכשיו דורשים התייצבות.
+# אי אפשר לאמת מכאן. כל עוד הסקריפט חי, AttachThreadInput עדיין בתוקף
+# והחלון אכן נראה בחזית - אבל ברגע שהוא מסתיים ומתנתק, Windows מחזיר את
+# המיקוד הקודם. אומת במדידה: הבדיקה מבפנים אמרה "עלה" ב-4 מתוך 4, בזמן
+# שבפועל החלון עלה ונשאר רק באחת מהן.
+#
+# לכן רק מדווחים את התהליכים הרלוונטיים, והאימות נעשה בתהליך נפרד אחרי
+# שזה כאן כבר מת - שם נמדד מה שהמשתמש באמת רואה.
+$targetPid = $proc.Id
+$kin = @($targetPid)
+try {
+    $kin += (Get-CimInstance Win32_Process -Filter "ParentProcessId=$targetPid" |
+             Select-Object -ExpandProperty ProcessId)
+} catch { }
+Write-Output "GEMMCP_TARGET_PIDS $($kin -join ',') $($proc.ProcessName)"
 `;
           return new Promise((resolve) => {
             execFile('powershell.exe',
@@ -197,29 +270,47 @@ if ([ForceFocus]::GetForegroundWindow() -eq $hWnd) {
                 }));
               }
 
-              // ההצלחה נקבעת לפי מה שהסקריפט מדד, לא לפי קוד היציאה. קוד
-              // היציאה היה 0 גם כשהחלון לא זז, ולכן דווח "הוקפץ בהצלחה"
-              // בזמן ששום דבר לא קרה על המסך.
-              if (out.includes('GEMMCP_FOCUS_OK')) {
-                return resolve(res.json({
-                  success: true,
-                  data: { message: `חלון ${appName} הוקפץ לקדמת המסך.` }
-                }));
-              }
-
-              if (out.includes('GEMMCP_FOCUS_REFUSED')) {
+              const m = out.match(/GEMMCP_TARGET_PIDS ([\d,]+) (\S+)/);
+              if (!m) {
                 return resolve(res.json({
                   success: false,
-                  error: `החלון של '${appName}' נמצא, אבל Windows סירב להביא אותו לחזית. ` +
-                         'המערכת מתירה זאת רק לתוכנה שכבר בחזית, והגשר רץ ברקע. ' +
-                         'לחיצה על סמל התוכנה בשורת המשימות תעבוד.'
+                  error: `לא ניתן לאמת שהחלון של '${appName}' עלה לחזית.`
                 }));
               }
+              const kin = m[1].split(',').map(Number).filter(Boolean);
+              const procName = m[2];
 
-              return resolve(res.json({
-                success: false,
-                error: `לא ניתן לאמת שהחלון של '${appName}' עלה לחזית.`
-              }));
+              // האימות רץ בתהליך נפרד, אחרי שסקריפט המיקוד כבר מת. כל עוד
+              // הוא חי, AttachThreadInput בתוקף והחלון נראה בחזית גם כשהוא
+              // חוזר אחורה מיד אחרי - כלומר בדיקה מבפנים תמיד אומרת "הצליח".
+              setTimeout(() => {
+                execFile('powershell.exe',
+                  ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', FOREGROUND_PROBE],
+                  { timeout: 10000, windowsHide: true }, (e2, o2) => {
+                    const fm = String(o2 || '').match(/GEMMCP_FRONT (\d+) (\d+)/);
+                    const frontPid = fm ? Number(fm[1]) : 0;
+                    const frontParent = fm ? Number(fm[2]) : 0;
+                    const inFront = frontPid > 0 &&
+                      (kin.includes(frontPid) || kin.includes(frontParent));
+
+                    if (inFront) {
+                      return resolve(res.json({
+                        success: true,
+                        data: { message: `חלון ${appName} נמצא כעת בחזית.` }
+                      }));
+                    }
+                    resolve(res.json({
+                      success: false,
+                      error: `נמצא חלון של '${appName}' (${procName}), אבל Windows לא העביר אותו לחזית. ` +
+                             'המערכת מתירה החלפת חלון בחזית רק לתוכנה שכבר בחזית, והגשר רץ ברקע. ' +
+                             'לחיצה על סמל התוכנה בשורת המשימות תעבוד.'
+                    }));
+                  });
+                // 2.5 שניות ולא פחות. אומת במדידה: החלון אכן עולה לחזית
+                // לרגע, ואז מאבד אותה תוך כשנייה. בדיקה מוקדמת תפסה את
+                // ההבזק ודיווחה הצלחה, בזמן שהמשתמש ראה חלון אחר לגמרי.
+                // מה שנמדד כאן הוא המצב שנשאר על המסך, וזה מה שנחשב.
+              }, 2500);
             });
           });
 
