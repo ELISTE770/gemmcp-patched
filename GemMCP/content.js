@@ -39,6 +39,9 @@
   // היקף ההרצה האוטומטית: 'read' מריץ רק פעולות קריאה ועוצר על כל השאר,
   // 'all' מריץ הכל בלי לשאול. התקרה בשרת ותיחום התיקייה נאכפים בשני המצבים.
   let autoRunScope = 'read';
+  // פועל רק בשיחות שהופעלו במפורש. ברירת המחדל דלוקה: התערבות בשיחה שלא
+  // ביקשת בה כלום היא הפתעה, לא נוחות.
+  let requireActivation = true;
   // ברירת המחדל היא השירותים שעובדים ללא שום הגדרה. supabase היה בברירת
   // המחדל למרות שהוא דורש URL ומפתח, בעוד windows - היחיד שעובד מיד - היה
   // כבוי, כך שאחרי התקנה נקייה הגשר נראה מנותק בלי סיבה נראית לעין.
@@ -74,7 +77,7 @@
   // טעינת הגדרות שמורות
   // autoRunScope חייב להיות ברשימה, אחרת data.autoRunScope תמיד undefined
   // והמצב היה חוזר ל'בטוח' בכל טעינת דף במקום להישאר כפי שנבחר.
-  chrome.storage.sync.get(['activeServices', 'autoExecute', 'autoRunScope', 'customServers', 'customToolPrompts', ...CONNECTION_KEYS], (data) => {
+  chrome.storage.sync.get(['activeServices', 'autoExecute', 'autoRunScope', 'requireActivation', 'customServers', 'customToolPrompts', ...CONNECTION_KEYS], (data) => {
     connectedServices = computeConnectedServices(data);
     if (data.activeServices && Array.isArray(data.activeServices)) {
       activeServices = data.activeServices;
@@ -90,6 +93,7 @@
       isAutoExecute = false;
     }
     autoRunScope = data.autoRunScope === 'all' ? 'all' : 'read';
+    requireActivation = data.requireActivation !== false;
     syncScopeChips();
     const autoToggle = document.getElementById('omni-mcp-auto-toggle');
     if (autoToggle) autoToggle.checked = isAutoExecute;
@@ -115,6 +119,10 @@
       const autoToggle = document.getElementById('omni-mcp-auto-toggle');
       if (autoToggle) autoToggle.checked = isAutoExecute;
       syncAutoRunWarning();
+    }
+
+    if (changes.requireActivation) {
+      requireActivation = changes.requireActivation.newValue !== false;
     }
 
     if (changes.autoRunScope) {
@@ -334,6 +342,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const autoToggle = document.getElementById('omni-mcp-auto-toggle');
     const dragHeader = document.getElementById('omni-mcp-drag-header');
     logsContainer = document.getElementById('omni-mcp-logs');
+    loadActivatedChats();
     restorePersistedLog();
     wireLogControls();
     wireScheduleControls();
@@ -1065,6 +1074,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // עקבה בכניסה. בלעדיה, יציאה מוקדמת דרך alert לא הותירה שום סימן - לא
     // שורת יומן ולא שגיאה - וההתנהגות נראתה כאילו הכפתור עצמו מת.
     addLog('מפעיל את GemMCP בשיחה הזו...');
+    markChatActivated();
 
     const inputField = findGeminiInputField();
     if (!inputField) {
@@ -1508,6 +1518,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   function scanForToolCalls(forceRescan = false) {
+    // אותו עיקרון כמו בהעשרה: בשיחה שלא הופעלה, התוסף לא פועל על JSON
+    // שג'מיני הפיק. הוא עשוי להפיק JSON מסיבות שאין להן קשר לכלי הזה.
+    // סריקה ידנית מהפאנל היא בקשה מפורשת, ולכן היא מפעילה את השיחה.
+    if (requireActivation && !isChatActivated()) {
+      if (forceRescan) {
+        markChatActivated();
+        addLog('הופעל בשיחה הזו לפי בקשת סריקה ידנית.');
+      } else {
+        return false;
+      }
+    }
     if (isExecuting) return false;
 
     // בעבר הסריקה נדחתה כאן כל עוד isGeminiGenerating() החזירה true - המתנה
@@ -1570,6 +1591,46 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       }
     }
     return foundAndTriggered;
+  }
+
+  // ---------------------------------------------------------------------
+  // הפעלה לפי שיחה.
+  //
+  // "הפעלתי בשיחה הזו" הוא מצב של שיחה מסוימת, לא של התוסף כולו. בלי זה
+  // התוסף התערב בכל שיחה - הוסיף סכימות להודעות ופעל על JSON שג'מיני
+  // הפיק מסיבות אחרות - גם כשלא ביקשת ממנו כלום שם.
+  //
+  // המצב נשמר לפי מזהה השיחה, כך שהוא שורד רענון ומעבר בין שיחות.
+  // ---------------------------------------------------------------------
+  const ACTIVATED_KEY = 'activatedChats';
+  let activatedChats = new Set();
+
+  function chatId() {
+    return location.pathname;   // /app/<id>, או /app לשיחה חדשה
+  }
+
+  function isChatActivated() {
+    return activatedChats.has(chatId());
+  }
+
+  async function markChatActivated() {
+    const id = chatId();
+    activatedChats.add(id);
+    try {
+      const store = await chrome.storage.local.get([ACTIVATED_KEY]);
+      const list = Array.isArray(store[ACTIVATED_KEY]) ? store[ACTIVATED_KEY] : [];
+      if (!list.includes(id)) {
+        // תקרה: רשימה שגדלה בלי גבול תיצור אחסון שמנפח את עצמו לנצח.
+        await chrome.storage.local.set({ [ACTIVATED_KEY]: [...list, id].slice(-200) });
+      }
+    } catch (e) { /* אחסון שנכשל לא יעצור הפעלה */ }
+  }
+
+  async function loadActivatedChats() {
+    try {
+      const store = await chrome.storage.local.get([ACTIVATED_KEY]);
+      if (Array.isArray(store[ACTIVATED_KEY])) activatedChats = new Set(store[ACTIVATED_KEY]);
+    } catch (e) { /* נשארים עם מה שיש בזיכרון */ }
   }
 
   // מזהה השיחה נכנס למפתח, אחרת אותה פקודה בשתי שיחות שונות הייתה נחסמת.
@@ -2201,6 +2262,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   function enrichInputIfNeeded(inputField) {
+    // התוסף לא נוגע בשיחה שלא הופעל בה.
+    //
+    // קודם הוא זיהה כוונה בכל הודעה בכל שיחה, והוסיף סכימה לטקסט שנשלח -
+    // גם כשהמשתמש רק שאל שאלה רגילה ולא ביקש שום פעולה במחשב. זה שינה את
+    // ההודעה מאחורי הגב, ובשיחות שלא נועדו לכך בכלל.
+    if (requireActivation && !isChatActivated()) return false;
+
     let target = inputField;
     if (inputField.tagName && inputField.tagName.toLowerCase() === 'rich-textarea') {
       target = inputField.querySelector('div[contenteditable="true"]') || inputField;

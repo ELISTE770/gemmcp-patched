@@ -211,6 +211,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // מצב הרצה. נשמר לבדו ולא דרך מסלול השמירה של השירותים, כדי שלא ייגרר
   // לשמירה חלקית של דברים אחרים. הפאנל בדף מאזין לאותו מפתח ומתעדכן מיד.
+  const requireActivationBox = document.getElementById('require-activation');
+  if (requireActivationBox) {
+    requireActivationBox.addEventListener('change', () => {
+      chrome.storage.sync.set({ requireActivation: requireActivationBox.checked });
+    });
+  }
+
   document.querySelectorAll('input[name="run-mode"]').forEach((radio) => {
     radio.addEventListener('change', () => {
       if (!radio.checked) return;
@@ -799,6 +806,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const scope = data.autoRunScope === 'all' ? 'all' : 'read';
       const scopeRadio = document.getElementById(scope === 'all' ? 'run-mode-all' : 'run-mode-read');
       if (scopeRadio) scopeRadio.checked = true;
+
+      const reqAct = document.getElementById('require-activation');
+      if (reqAct) reqAct.checked = data.requireActivation !== false;
 
       const readScopeSel = document.getElementById('win-read-scope');
       if (readScopeSel) {
