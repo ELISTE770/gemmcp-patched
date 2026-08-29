@@ -992,9 +992,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   function injectActiveSystemPrompt() {
+    // עקבה בכניסה. בלעדיה, יציאה מוקדמת דרך alert לא הותירה שום סימן - לא
+    // שורת יומן ולא שגיאה - וההתנהגות נראתה כאילו הכפתור עצמו מת.
+    addLog('מפעיל את GemMCP בשיחה הזו...');
+
     const inputField = findGeminiInputField();
     if (!inputField) {
-      alert('לא נמצאה תיבת הקלט של Gemini בדף.');
+      addLog('ההפעלה נעצרה: לא נמצאה תיבת הקלט של ג׳מיני בדף.', { error: true });
       return;
     }
 

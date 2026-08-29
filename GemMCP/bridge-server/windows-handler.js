@@ -93,12 +93,64 @@ async function handleWindowsExecute(req, res, deps) {
             });
           });
         
-        
-        
-        
-        
         } else if (cmd === 'focus' && appName) {
           const psCode = `
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class ForceFocus {
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr ProcessId);
+
+    [DllImport("user32.dll")]
+    public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+
+    [DllImport("kernel32.dll")]
+    public static extern uint GetCurrentThreadId();
+
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll")]
+    public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern bool BringWindowToTop(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, int dwExtraInfo);
+
+    public static void ForceForeground(IntPtr targetHWnd) {
+        if (targetHWnd == IntPtr.Zero) return;
+
+        // 9 = SW_RESTORE (restores window even if minimized to taskbar)
+        ShowWindow(targetHWnd, 9);
+
+        IntPtr foreHWnd = GetForegroundWindow();
+        uint foreThread = GetWindowThreadProcessId(foreHWnd, IntPtr.Zero);
+        uint curThread = GetCurrentThreadId();
+
+        if (foreThread != curThread) {
+            AttachThreadInput(curThread, foreThread, true);
+        }
+
+        // Simulate Alt key press/release to bypass Windows 11 foreground lock
+        keybd_event(0x12, 0, 0, 0); // Alt down
+        keybd_event(0x12, 0, 2, 0); // Alt up
+
+        BringWindowToTop(targetHWnd);
+        SetForegroundWindow(targetHWnd);
+
+        if (foreThread != curThread) {
+            AttachThreadInput(curThread, foreThread, false);
+        }
+    }
+}
+"@
+
 $target = [regex]::Escape($env:GEMMCP_TARGET)
 $proc = Get-Process | Where-Object { 
     ($_.MainWindowTitle -and $_.MainWindowTitle -match $target) -or
@@ -110,37 +162,64 @@ if (-not $proc) {
     exit 1
 }
 
-$wshell = New-Object -ComObject WScript.Shell
-
-# 1. Activate window by PID or Title
-$activated = $wshell.AppActivate($proc.Id)
-if (-not $activated -and $proc.MainWindowTitle) {
-    $activated = $wshell.AppActivate($proc.MainWindowTitle)
+$hWnd = $proc.MainWindowHandle
+if ($hWnd -ne [IntPtr]::Zero) {
+    [ForceFocus]::ForceForeground($hWnd)
+} else {
+    Add-Type -AssemblyName Microsoft.VisualBasic
+    [Microsoft.VisualBasic.Interaction]::AppActivate($proc.Id)
+    Start-Sleep -Milliseconds 250
+    $hWnd = (Get-Process -Id $proc.Id).MainWindowHandle
 }
 
-# 2. Restore if minimized (Alt + Space, R)
-Start-Sleep -Milliseconds 50
-$wshell.SendKeys('% r')
-
-# 3. Final focus
-Start-Sleep -Milliseconds 50
-$wshell.AppActivate($proc.Id)
-
-Write-Output "Focused."
+# בודקים מה באמת קרה, ולא מניחים. Windows מסרב להעביר חלון לחזית מתהליך
+# שאינו כבר בחזית, והגשר רץ מנותק - כך ש-SetForegroundWindow נכשל בשקט,
+# הסקריפט הסתיים בהצלחה, ודווח למשתמש "הוקפץ בהצלחה" בזמן ששום דבר לא זז.
+Start-Sleep -Milliseconds 350
+if ([ForceFocus]::GetForegroundWindow() -eq $hWnd) {
+    Write-Output "GEMMCP_FOCUS_OK $($proc.ProcessName)"
+} else {
+    Write-Output "GEMMCP_FOCUS_REFUSED $($proc.ProcessName)"
+}
 `;
           return new Promise((resolve) => {
             execFile('powershell.exe',
               ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', psCode],
-              { timeout: 15000, windowsHide: true, env: { ...process.env, GEMMCP_TARGET: String(appName) } },
+              { timeout: 25000, windowsHide: true, env: { ...process.env, GEMMCP_TARGET: String(appName) } },
               (error, stdout, stderr) => {
+              const out = String(stdout || '');
+
               if (error || (stderr && stderr.includes('Error'))) {
-                // לא מחזירים את stderr הגולמי: הוא כלל את קוד ה-PowerShell שנוצר,
-                // כולל מה שנשלח כפרמטר. הפירוט נשאר בצד השרת.
                 console.warn('[manage_windows focus]', stderr || (error && error.message));
-                resolve(res.json({ success: false, error: `לא נמצא חלון פעיל שתואם ל-'${appName}'.` }));
-              } else {
-                resolve(res.json({ success: true, data: { message: `חלון ${appName} הוקפץ בהצלחה לקדמת המסך!` } }));
+                return resolve(res.json({
+                  success: false,
+                  error: `לא נמצא חלון פעיל שתואם ל-'${appName}'.`
+                }));
               }
+
+              // ההצלחה נקבעת לפי מה שהסקריפט מדד, לא לפי קוד היציאה. קוד
+              // היציאה היה 0 גם כשהחלון לא זז, ולכן דווח "הוקפץ בהצלחה"
+              // בזמן ששום דבר לא קרה על המסך.
+              if (out.includes('GEMMCP_FOCUS_OK')) {
+                return resolve(res.json({
+                  success: true,
+                  data: { message: `חלון ${appName} הוקפץ לקדמת המסך.` }
+                }));
+              }
+
+              if (out.includes('GEMMCP_FOCUS_REFUSED')) {
+                return resolve(res.json({
+                  success: false,
+                  error: `החלון של '${appName}' נמצא, אבל Windows סירב להביא אותו לחזית. ` +
+                         'המערכת מתירה זאת רק לתוכנה שכבר בחזית, והגשר רץ ברקע. ' +
+                         'לחיצה על סמל התוכנה בשורת המשימות תעבוד.'
+                }));
+              }
+
+              return resolve(res.json({
+                success: false,
+                error: `לא ניתן לאמת שהחלון של '${appName}' עלה לחזית.`
+              }));
             });
           });
 
@@ -283,8 +362,8 @@ Write-Output "Focused."
 
         const appAliases = {
           // AI & Chat
-          'claude': 'claude',
-          'קלוד': 'claude',
+          'claude': 'https://claude.ai/new',
+          'קלוד': 'https://claude.ai/new',
           'chatgpt': 'chatgpt',
           'gpt': 'chatgpt',
           'גפט': 'chatgpt',
