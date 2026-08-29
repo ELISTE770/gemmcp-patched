@@ -72,7 +72,9 @@
   ];
 
   // טעינת הגדרות שמורות
-  chrome.storage.sync.get(['activeServices', 'autoExecute', 'customServers', 'customToolPrompts', ...CONNECTION_KEYS], (data) => {
+  // autoRunScope חייב להיות ברשימה, אחרת data.autoRunScope תמיד undefined
+  // והמצב היה חוזר ל'בטוח' בכל טעינת דף במקום להישאר כפי שנבחר.
+  chrome.storage.sync.get(['activeServices', 'autoExecute', 'autoRunScope', 'customServers', 'customToolPrompts', ...CONNECTION_KEYS], (data) => {
     connectedServices = computeConnectedServices(data);
     if (data.activeServices && Array.isArray(data.activeServices)) {
       activeServices = data.activeServices;
@@ -88,8 +90,7 @@
       isAutoExecute = false;
     }
     autoRunScope = data.autoRunScope === 'all' ? 'all' : 'read';
-    const scopeSel = document.getElementById('omni-mcp-auto-scope');
-    if (scopeSel) scopeSel.value = autoRunScope;
+    syncScopeChips();
     const autoToggle = document.getElementById('omni-mcp-auto-toggle');
     if (autoToggle) autoToggle.checked = isAutoExecute;
     // גם כאן, ולא רק בלחיצה ובשינוי אחסון: זה המסלול שרץ כשהדף נטען וההגדרה
@@ -224,6 +225,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             </button>
           </div>
 
+          <div style="font-size: 12px; color: #6b7280; font-weight: 700; margin-top: 4px;">מצב הרצה</div>
+          <div class="omni-mcp-services-chips" id="omni-mcp-scope-chips">
+            <div class="omni-service-chip" data-scope="read" title="רק פעולות קריאה רצות לבד. כל פעולה שמשנה משהו נעצרת לאישור.">🛡️ <span>בטוח</span></div>
+            <div class="omni-service-chip" data-scope="all" title="הכל רץ בלי לשאול, כולל הרצת פקודות, מחיקה ותוכניות. התקרה בשרת עדיין חלה.">⚡ <span>אוטונומי</span></div>
+          </div>
+
           <button class="omni-mcp-action-btn" id="omni-mcp-inject-prompt-btn">
             <svg class="omni-mcp-action-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 15l7-7 7 7"/></svg>
             <span>${t('widgetInjectBtn', currentLang)}</span>
@@ -259,17 +266,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           <div class="omni-mcp-toggle-row">
             <span>${t('widgetAutoRun', currentLang)}</span>
             <input type="checkbox" id="omni-mcp-auto-toggle" ${isAutoExecute ? 'checked' : ''} style="cursor: pointer; transform: scale(1.2);">
-          </div>
-
-          <div id="omni-mcp-auto-scope-row" style="display:${isAutoExecute ? 'flex' : 'none'};
-               gap:6px; align-items:center; margin:0 0 6px; font-size:11.5px; color:#cbd5e1;">
-            <span>היקף:</span>
-            <select id="omni-mcp-auto-scope"
-              style="flex:1; font-size:11.5px; padding:4px 6px; border-radius:6px;
-                     border:1px solid #334155; background:#0f172a; color:#e2e8f0;">
-              <option value="read">בטוח - רק פעולות קריאה רצות לבד</option>
-              <option value="all">אוטונומי - הכל רץ לבד, בלי לשאול</option>
-            </select>
           </div>
 
           <div id="omni-mcp-autorun-warning"
@@ -824,10 +820,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             'כל פעולה שמשנה משהו עדיין דורשת אישור.';
       }
     }
-    const row = document.getElementById('omni-mcp-auto-scope-row');
-    if (row) row.style.display = isAutoExecute ? 'flex' : 'none';
-    const sel = document.getElementById('omni-mcp-auto-scope');
-    if (sel && sel.value !== autoRunScope) sel.value = autoRunScope;
+    syncScopeChips();
+  }
+
+  // הצ'יפים משקפים תמיד את ההגדרה השמורה. היא נשמרת ב-chrome.storage.sync,
+  // כלומר היא אחת לכל השיחות ולכל הלשוניות, ולא נאפסת בין צ'אטים.
+  function syncScopeChips() {
+    document.querySelectorAll('#omni-mcp-scope-chips .omni-service-chip').forEach((chip) => {
+      chip.classList.toggle('active', chip.dataset.scope === autoRunScope);
+    });
   }
 
   // תזמון הזרקת פרומפט. הצד שיוצר את ההתראות היה חסר לגמרי, ולכן המאזין
@@ -835,14 +836,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // הבורר נקשר בבניית הפאנל, ולא רק כשלוחצים על המתג: אחרת הוא לא היה מגיב
   // כלל כשההרצה האוטומטית כבר הייתה דלוקה מקודם.
   function wireScopeControl() {
-    const sel = document.getElementById('omni-mcp-auto-scope');
-    if (!sel) return;
-    sel.value = autoRunScope;
-    sel.addEventListener('change', () => {
-      autoRunScope = sel.value === 'all' ? 'all' : 'read';
-      chrome.storage.sync.set({ autoRunScope });
-      syncAutoRunWarning();
-      addLog(`היקף ההרצה האוטומטית: ${autoRunScope === 'all' ? 'אוטונומי' : 'בטוח'}`);
+    const chips = document.querySelectorAll('#omni-mcp-scope-chips .omni-service-chip');
+    if (!chips.length) return;
+    syncScopeChips();
+
+    chips.forEach((chip) => {
+      chip.addEventListener('click', () => {
+        autoRunScope = chip.dataset.scope === 'all' ? 'all' : 'read';
+        chrome.storage.sync.set({ autoRunScope });
+        syncScopeChips();
+        syncAutoRunWarning();
+        addLog(`מצב הרצה: ${autoRunScope === 'all' ? 'אוטונומי' : 'בטוח'}`);
+      });
     });
   }
 
