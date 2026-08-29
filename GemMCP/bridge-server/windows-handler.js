@@ -4,6 +4,7 @@ const path = require('path');
 const { exec, execFile } = require('child_process');
 const { createFileActions } = require('./actions-files');
 const { readSmart } = require('./read-smart');
+const { createJob: createInstallJob, cancelJob: cancelInstallJob } = require('./install-jobs');
 
 // בדיקה קצרה בתהליך נפרד: איזה תהליך מחזיק כרגע את החלון שבחזית, ומי ההורה
 // שלו. מריצים אותה רק אחרי שסקריפט המיקוד הסתיים, כי כל עוד הוא חי המצב
@@ -348,6 +349,114 @@ Write-Output "GEMMCP_TARGET_PIDS $($kin -join ',') $($proc.ProcessName)"
 
         }
         return res.status(400).json({ success: false, error: 'Unknown manage_windows command' });
+      }
+
+      // הורדה והתקנה, כמשימה שאפשר לבטל.
+      //
+      // זה הצירוף המסוכן ביותר כאן: קובץ ממקור שאינו בשליטת המשתמש, שרץ על
+      // המחשב שלו. לכן הוא דורש אישור תמיד - גם במצב אוטונומי - וכל קובץ
+      // שנוצר נרשם, כדי שביטול יחזיר את המחשב למצב שלפני.
+      case 'install_from_url': {
+        if (!perms.writeFiles) {
+          return res.status(403).json({ success: false, error: 'הרשאת כתיבת קבצים כבויה בהגדרות התוסף או השרת.' });
+        }
+        if (!perms.launchApps) {
+          return res.status(403).json({ success: false, error: 'הרשאת הפעלת תוכנות כבויה בהגדרות התוסף או השרת.' });
+        }
+        if (!params.url) {
+          return res.status(400).json({ success: false, error: 'חסר פרמטר url' });
+        }
+
+        let iurl;
+        try { iurl = new URL(String(params.url)); } catch (e) {
+          return res.status(400).json({ success: false, error: 'כתובת לא תקינה.' });
+        }
+        if (iurl.protocol !== 'https:') {
+          return res.status(400).json({
+            success: false,
+            error: 'התקנה מותרת רק מכתובת https. הורדה ב-http ניתנת לשינוי בדרך, וכאן מריצים את התוצאה.'
+          });
+        }
+
+        const iname = path.basename(String(
+          params.filename || decodeURIComponent(iurl.pathname.split('/').pop() || '') || 'installer'
+        )).replace(/[<>:"|?*]/g, '_');
+
+        // רק סוגי קבצים שהם באמת מתקינים. בלי זה אפשר להוריד ולהריץ כל דבר.
+        const INSTALLER_EXT = new Set(['.exe', '.msi']);
+        if (!INSTALLER_EXT.has(path.extname(iname).toLowerCase())) {
+          return res.status(400).json({
+            success: false,
+            error: `רק קבצי exe או msi. הקובץ המבוקש הוא '${iname}'. להורדה רגילה השתמש ב-download_file.`
+          });
+        }
+
+        const job = createInstallJob(iurl.href);
+        // תיקיית בידוד לכל משימה, כדי שהביטול ידע בדיוק מה למחוק ולא יגע
+        // בקבצים אחרים של המשתמש.
+        const stageDir = validatePathInScope(
+          path.join(perms.allowedPath || '.', '_gemmcp_installers', job.id)
+        );
+        const stagePath = path.join(stageDir, iname);
+
+        try {
+          fs.mkdirSync(stageDir, { recursive: true });
+          job.dirs.push(stageDir, path.dirname(stageDir));
+
+          const timer = setTimeout(() => job.controller.abort(), 180000);
+          const dl = await fetch(iurl, { signal: job.controller.signal, redirect: 'follow' });
+          clearTimeout(timer);
+          if (!dl.ok) throw new Error(`ההורדה נכשלה: ${dl.status} ${dl.statusText}`);
+
+          const bytes = Buffer.from(await dl.arrayBuffer());
+          const MAX = Number(process.env.WIN_DOWNLOAD_MAX_BYTES) || 500 * 1024 * 1024;
+          if (bytes.length > MAX) throw new Error(`הקובץ גדול מהמותר (${Math.round(bytes.length / 1048576)}MB).`);
+
+          fs.writeFileSync(stagePath, bytes);
+          job.files.push(stagePath);
+
+          if (job.status === 'cancelled') {
+            return res.json({ success: false, error: 'המשימה בוטלה לפני ההרצה.', data: { jobId: job.id } });
+          }
+
+          job.status = 'installing';
+          // ארגומנטים כמערך, בלי shell. המשתמש יכול לבקש התקנה שקטה.
+          const args = Array.isArray(params.args) ? params.args.map(String) : [];
+
+          // msi אינו קובץ הרצה. הרצה ישירה שלו נכשלת ב-spawn EFTYPE, ולכן
+          // הוא מועבר ל-msiexec. exe רץ כמו שהוא.
+          const isMsi = path.extname(stagePath).toLowerCase() === '.msi';
+          const cmd = isMsi ? 'msiexec.exe' : stagePath;
+          const cmdArgs = isMsi ? ['/i', stagePath, ...args] : args;
+
+          job.child = execFile(cmd, cmdArgs, { windowsHide: false }, (err) => {
+            job.status = err ? 'failed' : 'done';
+            job.error = err ? err.message : null;
+          });
+
+          return res.json({
+            success: true,
+            data: {
+              jobId: job.id,
+              path: stagePath,
+              bytes: bytes.length,
+              from: iurl.href,
+              status: 'installing',
+              message: 'המתקין הורד והופעל. אפשר לבטל מהפאנל - ביטול יעצור אותו וימחק את מה שהורד.'
+            }
+          });
+        } catch (e) {
+          job.status = 'failed';
+          job.error = e.message;
+          // ניקוי מיידי: קובץ חלקי ממקור חיצוני לא צריך להישאר על הדיסק.
+          cancelInstallJob(job.id);
+          const aborted = e && e.name === 'AbortError';
+          return res.json({
+            success: false,
+            error: aborted ? 'ההורדה בוטלה.' : `ההתקנה נכשלה: ${e.message}`,
+            data: { jobId: job.id }
+          });
+        }
       }
 
       // הורדת קובץ מהאינטרנט אל התיקייה המורשית.

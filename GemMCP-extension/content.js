@@ -835,6 +835,71 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // ברקע לא יכול היה לפעול - זה הממשק שמייצר אותן.
   // הבורר נקשר בבניית הפאנל, ולא רק כשלוחצים על המתג: אחרת הוא לא היה מגיב
   // כלל כשההרצה האוטומטית כבר הייתה דלוקה מקודם.
+  // כרטיס ביטול להתקנה שרצה. הוא נשאר בפאנל עד שמבטלים או סוגרים אותו,
+  // ומופיע מיד אחרי שהמתקין הופעל - שם עוד אפשר לחזור אחורה.
+  function showInstallCancelCard(info) {
+    const container = document.getElementById('omni-mcp-pending-actions');
+    if (!container) return;
+    openPanel();
+
+    const card = document.createElement('div');
+    card.className = 'omni-mcp-query-card';
+    card.style.borderInlineStart = '4px solid #b45309';
+
+    const title = document.createElement('div');
+    title.style.cssText = 'font-size:12px; font-weight:700; color:#fcd34d; margin-bottom:4px;';
+    title.textContent = '📦 התקנה רצה כעת';
+    card.appendChild(title);
+
+    const body = document.createElement('div');
+    body.style.cssText = 'font-size:11.5px; color:#cbd5e1; line-height:1.6; margin-bottom:8px; word-break:break-all;';
+    body.textContent = `${info.from || ''}${info.bytes ? ` · ${Math.round(info.bytes / 1024)} KB` : ''}`;
+    card.appendChild(body);
+
+    const hint = document.createElement('div');
+    hint.style.cssText = 'font-size:11px; color:#94a3b8; margin-bottom:8px;';
+    hint.textContent = 'ביטול יעצור את המתקין וימחק את הקובץ שהורד.';
+    card.appendChild(hint);
+
+    const btns = document.createElement('div');
+    btns.className = 'omni-mcp-btn-group';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'omni-mcp-action-btn';
+    cancelBtn.textContent = 'בטל ומחק את מה שהורד';
+    cancelBtn.addEventListener('click', async () => {
+      cancelBtn.disabled = true;
+      cancelBtn.textContent = 'מבטל...';
+      try {
+        const res = await chrome.runtime.sendMessage({ action: 'CANCEL_INSTALL', jobId: info.jobId });
+        if (res && res.success) {
+          const n = (res.data && res.data.removed && res.data.removed.length) || 0;
+          addLog(`ההתקנה בוטלה. נמחקו ${n} פריטים שהורדו.`);
+          card.remove();
+        } else {
+          addLog(`הביטול נכשל: ${(res && res.error) || 'לא ידוע'}`, { error: true });
+          cancelBtn.disabled = false;
+          cancelBtn.textContent = 'נסה לבטל שוב';
+        }
+      } catch (e) {
+        addLog(`הביטול נכשל: ${e.message}`, { error: true });
+        cancelBtn.disabled = false;
+        cancelBtn.textContent = 'נסה לבטל שוב';
+      }
+    });
+
+    const dismiss = document.createElement('button');
+    dismiss.className = 'omni-mcp-action-btn';
+    dismiss.style.opacity = '0.7';
+    dismiss.textContent = 'סגור';
+    dismiss.addEventListener('click', () => card.remove());
+
+    btns.appendChild(cancelBtn);
+    btns.appendChild(dismiss);
+    card.appendChild(btns);
+    container.appendChild(card);
+  }
+
   function wireScopeControl() {
     const chips = document.querySelectorAll('#omni-mcp-scope-chips .omni-service-chip');
     if (!chips.length) return;
@@ -1714,6 +1779,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // הורדה מהאינטרנט מביאה קובץ ממקור חיצוני אל הדיסק. זו כתיבה, והמקור
     // אינו בשליטת המשתמש - ולכן היא בדרג המסוכן ולא ב'שינוי'.
     download_file:   { level: 'danger',  label: 'הורדה מהאינטרנט',     icon: '🌐' },
+    // alwaysAsk: לעולם לא רצה לבד, גם במצב אוטונומי. הורדה והרצה של קובץ
+    // ממקור שאינו בשליטת המשתמש היא הפעולה היחידה כאן שמצדיקה חריגה
+    // מפורשת מהמצב שנבחר.
+    install_from_url:{ level: 'danger',  label: 'הורדה והתקנה',        icon: '📦', alwaysAsk: true },
     // דורש אישור ולא רץ אוטומטית: רשימת החלונות מגלה כותרות של מסמכים, מיילים
     // וכתובות פרטיות, והתוצאה נשלחת לג'מיני - כלומר החוצה. אין לה גם שום תיחום
     // לתיקייה מותרת, בניגוד ל-list_directory.
@@ -1767,6 +1836,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   function requiresExplicitApproval(service, toolCall) {
     const scope = (typeof autoRunScope !== 'undefined') ? autoRunScope : 'read';
 
+    // פעולה שסומנה alwaysAsk עוצרת לאישור בכל מצב. זה גובר גם על אוטונומי,
+    // כי הורדה והרצה של קובץ מהרשת היא לא משהו שצריך לקרות בלי שראית אותו.
+    if (classifyAction(toolCall).alwaysAsk) return true;
+
     // מצב אוטונומי: שום דבר אינו נעצר לאישור, כולל הרצת פקודות, מחיקה
     // ותוכניות. זו בחירה מפורשת של המשתמש, מאחורי מתג שכבוי כברירת מחדל.
     //
@@ -1793,6 +1866,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       case 'open_app':        return `לפתוח את התוכנה "${t(toolCall.app_name)}"`;
       case 'media_control':   return `לשלוח פקודת מדיה: ${t(toolCall.command)}`;
       case 'download_file':   return `להוריד מהאינטרנט: ${t(toolCall.url)}`;
+      case 'install_from_url': return `להוריד ולהתקין מ: ${t(toolCall.url)}`;
       case 'manage_windows':  return toolCall.command === 'focus'
                                 ? `להביא לקדמת המסך את "${t(toolCall.app_name)}"`
                                 : 'לקבל את רשימת החלונות הפתוחים';
@@ -2043,6 +2117,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               });
             } else if (response && response.success) {
               addLog(`הפעולה עבור [${service}] הצליחה! מחזיר לג'מיני...`);
+              // התקנה מחזירה מזהה משימה. מציגים כפתור ביטול כל עוד יש מה
+              // לבטל, כי אחרי שהמתקין כבר סיים אין דרך לחזור אחורה - וזה
+              // בדיוק החלון שבו המשתמש עשוי לחשוב שוב.
+              if (response.data && response.data.jobId) {
+                showInstallCancelCard(response.data);
+              }
               sendResponseToGemini(service, {
                 status: "success",
                 action: toolCall.action,

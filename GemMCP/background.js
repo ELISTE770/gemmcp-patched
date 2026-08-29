@@ -505,6 +505,24 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  // ביטול התקנה. עובר דרך ה-service worker כמו כל פנייה לגשר: מדיניות
+  // Local Network Access חוסמת גישה ל-localhost מהקשר הדף.
+  if (request.action === 'CANCEL_INSTALL') {
+    (async () => {
+      try {
+        const res = await fetch('http://127.0.0.1:3000/api/windows/install/cancel', {
+          method: 'POST',
+          headers: { ...(await buildBridgeHeaders()), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jobId: request.jobId })
+        });
+        sendResponse(await res.json());
+      } catch (e) {
+        sendResponse({ success: false, error: e.message });
+      }
+    })();
+    return true;
+  }
+
   if (request.action === 'EXECUTE_MCP_TOOL') {
     const from = sender && sender.tab && sender.tab.url;
     if (!from || !from.startsWith('https://gemini.google.com/')) {

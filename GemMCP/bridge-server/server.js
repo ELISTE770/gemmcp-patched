@@ -7,6 +7,7 @@ const { exec, execFile } = require('child_process');
 const crypto = require('crypto');
 const { createFileActions } = require('./actions-files');
 const { handleWindowsExecute } = require('./windows-handler');
+const { cancelJob: cancelInstallJob, listJobs: listInstallJobs } = require('./install-jobs');
 const { runPlan, MAX_STEPS } = require('./plan-runner');
 const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
@@ -885,6 +886,23 @@ data: ${JSON.stringify(data)}
 
   // אם הלקוח מתנתק, אין טעם להשאיר תהליך רץ
   req.on('close', () => { try { child.kill(); } catch (e) {} });
+});
+
+// ביטול התקנה: עוצר את המתקין אם הוא עוד רץ, ומוחק את מה שהורד.
+// זה מה שהופך התקנה מפעולה בלתי הפיכה למשהו שאפשר לחזור ממנו.
+app.post('/api/windows/install/cancel', (req, res) => {
+  const { jobId } = req.body || {};
+  const out = cancelInstallJob(jobId);
+  auditLog('install_cancel', { jobId }, out.found ? 'success' : 'denied',
+           out.found ? `נמחקו ${out.removed.length} פריטים` : 'משימה לא נמצאה');
+  if (!out.found) {
+    return res.status(404).json({ success: false, error: 'לא נמצאה משימת התקנה עם המזהה הזה.' });
+  }
+  return res.json({ success: true, data: out });
+});
+
+app.get('/api/windows/install/jobs', (req, res) => {
+  res.json({ success: true, data: listInstallJobs() });
 });
 
 app.post('/api/windows/plan', async (req, res) => {
