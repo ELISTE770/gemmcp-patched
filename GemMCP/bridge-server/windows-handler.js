@@ -3,6 +3,7 @@ const os = require('os');
 const path = require('path');
 const { exec, execFile } = require('child_process');
 const { createFileActions } = require('./actions-files');
+const { readSmart } = require('./read-smart');
 
 // בדיקה קצרה בתהליך נפרד: איזה תהליך מחזיק כרגע את החלון שבחזית, ומי ההורה
 // שלו. מריצים אותה רק אחרי שסקריפט המיקוד הסתיים, כי כל עוד הוא חי המצב
@@ -349,6 +350,82 @@ Write-Output "GEMMCP_TARGET_PIDS $($kin -join ',') $($proc.ProcessName)"
         return res.status(400).json({ success: false, error: 'Unknown manage_windows command' });
       }
 
+      // הורדת קובץ מהאינטרנט אל התיקייה המורשית.
+      //
+      // כתיבה, ולכן היא כפופה להרשאת הכתיבה ולתחום הכתיבה - לא לתחום הקריאה
+      // הרחב. הורדה יכולה להגיע לכל מקום ברשת, אבל הקובץ נוחת רק במקום אחד.
+      case 'download_file': {
+        if (!perms.writeFiles) {
+          return res.status(403).json({ success: false, error: 'הרשאת כתיבת קבצים כבויה בהגדרות התוסף או השרת.' });
+        }
+        if (!params.url) {
+          return res.status(400).json({ success: false, error: 'חסר פרמטר url להורדה' });
+        }
+
+        let url;
+        try { url = new URL(String(params.url)); } catch (e) {
+          return res.status(400).json({ success: false, error: 'כתובת לא תקינה.' });
+        }
+        // רק http/https. file: היה קורא מהדיסק המקומי ועוקף את תחום הקריאה.
+        if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+          return res.status(400).json({ success: false, error: 'רק כתובות http ו-https נתמכות.' });
+        }
+
+        // שם הקובץ נגזר מהכתובת אם לא נשלח, ותמיד עובר basename כדי ששרת
+        // מרוחק לא יוכל לקבוע נתיב באמצעות שם עם לוכסנים.
+        const suggested = params.filename ||
+          decodeURIComponent(url.pathname.split('/').pop() || '') || 'download';
+        const safeName = path.basename(String(suggested)).replace(/[<>:"|?*]/g, '_') || 'download';
+        const destDir = validatePathInScope(params.path || perms.allowedPath || '.');
+        const dest = validatePathInScope(path.join(destDir, safeName));
+
+        if (fs.existsSync(dest) && !params.overwrite) {
+          return res.status(409).json({ success: false, error: `הקובץ כבר קיים: ${dest}. הוסף overwrite=true כדי לדרוס.` });
+        }
+
+        const MAX_BYTES = Number(process.env.WIN_DOWNLOAD_MAX_BYTES) || 200 * 1024 * 1024;
+        try {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 120000);
+          const resp = await fetch(url, { signal: controller.signal, redirect: 'follow' });
+          clearTimeout(timer);
+
+          if (!resp.ok) {
+            return res.json({ success: false, error: `ההורדה נכשלה: ${resp.status} ${resp.statusText}` });
+          }
+
+          // בודקים את הגודל המוצהר לפני שמורידים, וגם את בפועל אחרי - כותרת
+          // יכולה לשקר או להיעדר.
+          const declared = Number(resp.headers.get('content-length') || 0);
+          if (declared && declared > MAX_BYTES) {
+            return res.json({ success: false, error: `הקובץ גדול מהמותר (${Math.round(declared / 1048576)}MB).` });
+          }
+
+          const buf = Buffer.from(await resp.arrayBuffer());
+          if (buf.length > MAX_BYTES) {
+            return res.json({ success: false, error: `הקובץ גדול מהמותר (${Math.round(buf.length / 1048576)}MB).` });
+          }
+
+          fs.mkdirSync(path.dirname(dest), { recursive: true });
+          fs.writeFileSync(dest, buf);
+          return res.json({
+            success: true,
+            data: {
+              path: dest,
+              bytes: buf.length,
+              contentType: resp.headers.get('content-type') || null,
+              from: url.href
+            }
+          });
+        } catch (e) {
+          const aborted = e && e.name === 'AbortError';
+          return res.json({
+            success: false,
+            error: aborted ? 'ההורדה בוטלה לאחר שתי דקות ללא סיום.' : `ההורדה נכשלה: ${e.message}`
+          });
+        }
+      }
+
       case 'read_file': {
         if (!perms.readFiles) {
           return res.status(403).json({ success: false, error: 'הרשאת קריאת קבצים (WIN_PERM_READ) כבויה בשרת.' });
@@ -360,7 +437,25 @@ Write-Output "GEMMCP_TARGET_PIDS $($kin -join ',') $($proc.ProcessName)"
         if (!fs.existsSync(filePath)) {
           return res.status(404).json({ success: false, error: `הקובץ אינו קיים: ${params.path}` });
         }
-        const content = fs.readFileSync(filePath, 'utf8');
+        // לפי סוג הקובץ ולא כאילו הכול טקסט. PDF ו-Word מומרים לטקסט,
+        // וקובץ בינארי מדווח ככזה במקום להישפך כג'יבריש שהמודל מנסה לפרש.
+        const smart = await readSmart(filePath);
+        const content = smart.text;
+
+        if (smart.kind === 'binary' || (!content && smart.note)) {
+          return res.json({
+            success: true,
+            data: {
+              path: params.path,
+              kind: smart.kind,
+              totalChars: 0,
+              returned: 0,
+              hasMore: false,
+              content: '',
+              note: smart.note
+            }
+          });
+        }
 
         // חלון קריאה נשלט במקום חיתוך קבוע ב-50k. קובץ גדול נקרא בקטעים
         // רצופים במקום להיחתך בשקט באמצע.
@@ -372,6 +467,8 @@ Write-Output "GEMMCP_TARGET_PIDS $($kin -join ',') $($proc.ProcessName)"
           success: true,
           data: {
             path: params.path,
+            kind: smart.kind,
+            meta: smart.meta,
             totalChars: content.length,
             offset: rfOffset,
             returned: slice.length,

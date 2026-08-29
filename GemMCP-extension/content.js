@@ -1711,6 +1711,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     find_files:      { level: 'safe',    label: 'חיפוש קבצים',        icon: '🔍' },
     open_app:        { level: 'safe',    label: 'פתיחת תוכנה',        icon: '🚀' },
     media_control:   { level: 'safe',    label: 'שליטה בנגן',          icon: '🎵' },
+    // הורדה מהאינטרנט מביאה קובץ ממקור חיצוני אל הדיסק. זו כתיבה, והמקור
+    // אינו בשליטת המשתמש - ולכן היא בדרג המסוכן ולא ב'שינוי'.
+    download_file:   { level: 'danger',  label: 'הורדה מהאינטרנט',     icon: '🌐' },
     // דורש אישור ולא רץ אוטומטית: רשימת החלונות מגלה כותרות של מסמכים, מיילים
     // וכתובות פרטיות, והתוצאה נשלחת לג'מיני - כלומר החוצה. אין לה גם שום תיחום
     // לתיקייה מותרת, בניגוד ל-list_directory.
@@ -1789,6 +1792,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     switch (action) {
       case 'open_app':        return `לפתוח את התוכנה "${t(toolCall.app_name)}"`;
       case 'media_control':   return `לשלוח פקודת מדיה: ${t(toolCall.command)}`;
+      case 'download_file':   return `להוריד מהאינטרנט: ${t(toolCall.url)}`;
       case 'manage_windows':  return toolCall.command === 'focus'
                                 ? `להביא לקדמת המסך את "${t(toolCall.app_name)}"`
                                 : 'לקבל את רשימת החלונות הפתוחים';

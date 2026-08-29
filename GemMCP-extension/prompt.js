@@ -216,6 +216,7 @@ const WINDOWS_TOOL_LINES = `Format response strictly as a JSON object for Window
 - open_app:       {"service": "windows", "action": "open_app", "app_name": "<name>"}
 - clipboard_read: {"service": "windows", "action": "clipboard_read"}
 - clipboard_write:{"service": "windows", "action": "clipboard_write", "text": "<text>"}
+- download_file:  {"service": "windows", "action": "download_file", "url": "<https url>", "filename": "<optional>"}
 - media_control:  {"service": "windows", "action": "media_control", "command": "play_pause|next|prev|vol_up|vol_down|mute"}
 - manage_windows: {"service": "windows", "action": "manage_windows", "command": "list"}   (or "focus" with "app_name")
 - run_command:    {"service": "windows", "action": "run_command", "command": "<powershell_command>"}
@@ -278,6 +279,7 @@ function generateOmniSystemPrompt(activeServices = ['supabase', 'notion', 'fetch
   Managing:  make_dir, copy_file, move_file, delete_file
   Other:     open_app, clipboard_read, clipboard_write, run_command
   System:    media_control, manage_windows
+  Internet:  download_file
   PREFER the dedicated action over run_command. Use run_command ONLY when no
   dedicated action fits - it is disabled by default and is the one permission
   the allowed-folder limit cannot contain. To create a folder use make_dir,
@@ -288,6 +290,7 @@ function generateOmniSystemPrompt(activeServices = ['supabase', 'notion', 'fetch
   Example: {"service": "windows", "action": "list_directory", "path": "~/Downloads"}
   Example: {"service": "windows", "action": "media_control", "command": "play_pause"}
   Example: {"service": "windows", "action": "manage_windows", "command": "list"}
+  Example: {"service": "windows", "action": "download_file", "url": "https://example.com/a.pdf"}
 
   For a task needing several steps, send ONE plan instead of separate commands.
   Name a step with "as", then reference it as $name, $name.field or $name[i].
