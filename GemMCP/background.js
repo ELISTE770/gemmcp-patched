@@ -769,7 +769,8 @@ async function executeWindowsMcp(toolCall, config) {
     runCommands: config?.winPermissions?.runCommands ?? false,
     launchApps: config?.winPermissions?.launchApps ?? true,
     clipboard: config?.winPermissions?.clipboard ?? true,
-    allowedPath: config?.winAllowedPath || null
+    allowedPath: config?.winAllowedPath || null,
+    readScope: config?.winPermissions?.readScope ?? 'desktop'
   };
 
   if (isPlan) {
@@ -803,7 +804,8 @@ async function executeWindowsMcp(toolCall, config) {
       runCommands: config?.winPermissions?.runCommands ?? false,
       launchApps: config?.winPermissions?.launchApps ?? true,
       clipboard: config?.winPermissions?.clipboard ?? true,
-      allowedPath: config?.winAllowedPath || null
+      allowedPath: config?.winAllowedPath || null,
+      readScope: config?.winPermissions?.readScope ?? 'desktop'
     }
   };
 

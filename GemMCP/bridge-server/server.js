@@ -692,6 +692,54 @@ function isPathInside(child, parent) {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
+// תחום הקריאה נפרד מתחום הכתיבה.
+//
+// קודם נתיב אחד שלט בשניהם, ולכן כדי לקרוא קובץ מ-Downloads היה צריך לפתוח
+// את Downloads גם למחיקה. זו החלפה גרועה: קריאה היא פעולה הפיכה ומחיקה אינה.
+// ברירת המחדל כאן היא ללא הגבלת קריאה, והצמצום נעשה מההגדרות בתוסף.
+const SERVER_READ_PATH = (() => {
+  const raw = (process.env.WIN_READ_PATH || '*').trim();
+  if (raw === '*') return null;                       // ללא הגבלה
+  return path.resolve(expandPath(raw));
+})();
+
+// תיקיות מערכת חסומות תמיד, בכל היקף ובכל פעולה. "כל המחשב" פירושו כל מה
+// ששייך למשתמש, לא קבצי מערכת. לקריאה מהן אין שימוש לגיטימי בכלי הזה, והן
+// מכילות בדיוק את מה שכדאי שלא ידלוף.
+const SYSTEM_PATHS = [
+  process.env.SystemRoot,                 // C:\Windows
+  process.env.ProgramFiles,
+  process.env['ProgramFiles(x86)'],
+  process.env.ProgramData,
+  process.env.SystemDrive ? path.join(process.env.SystemDrive, '$Recycle.Bin') : null,
+
+  // AppData ו-.ssh אינם תיקיות מערכת, אבל הם המקום שבו יושבים עוגיות, טוקנים,
+  // פרופילי דפדפן ומפתחות פרטיים. "לקרוא את הקבצים שלי" לא מתכוון לאלה,
+  // וחשיפתם למודל היא בדיוק מה שאסור שיקרה בטעות.
+  // ההורה עצמו, ולא רק Roaming ו-Local: משתני הסביבה מצביעים על תתי-התיקיות,
+  // ולכן בקשה ל-AppData עצמה עקפה את החסימה והציגה את שלושתן.
+  path.join(os.homedir(), 'AppData'),
+  process.env.APPDATA,
+  process.env.LOCALAPPDATA,
+  path.join(os.homedir(), '.ssh')
+].filter(Boolean).map((p) => path.resolve(p));
+
+function isSystemPath(target) {
+  return SYSTEM_PATHS.some((sys) => {
+    const rel = path.relative(sys, target);
+    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  });
+}
+
+// היקפי קריאה שהתוסף יכול לבחור מהם. הלקוח שולח שם, לא נתיב, כדי שלא יוכל
+// להמציא נתיב משלו - הוא בוחר מתוך רשימה שהשרת מגדיר.
+function readScopeToPath(scope) {
+  if (scope === 'everything') return null;
+  if (scope === 'home') return os.homedir();
+  if (scope === 'desktop') return SERVER_ALLOWED_PATH;
+  return undefined;                                   // לא מוכר - מתעלמים
+}
+
 function resolvePermissions(clientPerms = {}) {
   // AND לוגי: הרשאה קיימת רק אם גם השרת וגם הלקוח מתירים אותה
   const narrow = (ceiling, requested) =>
@@ -706,13 +754,22 @@ function resolvePermissions(clientPerms = {}) {
     }
   }
 
+  // הלקוח יכול רק לצמצם גם כאן. אם התקרה בשרת מגבילה, בחירה רחבה יותר
+  // בתוסף לא תרחיב אותה.
+  let readPath = SERVER_READ_PATH;
+  const requestedRead = readScopeToPath(clientPerms.readScope);
+  if (requestedRead !== undefined && requestedRead !== null) {
+    if (isPathInside(requestedRead, SERVER_READ_PATH)) readPath = requestedRead;
+  }
+
   return {
     readFiles: narrow(SERVER_CEILING.readFiles, clientPerms.readFiles),
     writeFiles: narrow(SERVER_CEILING.writeFiles, clientPerms.writeFiles),
     runCommands: narrow(SERVER_CEILING.runCommands, clientPerms.runCommands),
     launchApps: narrow(SERVER_CEILING.launchApps, clientPerms.launchApps),
     clipboard: narrow(SERVER_CEILING.clipboard, clientPerms.clipboard),
-    allowedPath
+    allowedPath,
+    readPath
   };
 }
 
@@ -761,7 +818,7 @@ function auditLog(action, params, outcome, detail) {
 // /execute, ומסלול התוכניות נשאר על החתימה הישנה - כך שכל תוכנית נפלה על
 // "Cannot destructure property 'resolvePermissions' of 'deps'".
 const windowsDeps = {
-  resolvePermissions, auditLog, canonicalise, expandPath, isPathInside, checkDangerousWindowsCommands
+  resolvePermissions, auditLog, canonicalise, expandPath, isPathInside, isSystemPath, checkDangerousWindowsCommands
 };
 
 app.post('/api/windows/execute', (req, res) => handleWindowsExecute(req, res, windowsDeps));

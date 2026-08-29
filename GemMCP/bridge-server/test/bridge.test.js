@@ -120,11 +120,21 @@ function dir(p, permissions) {
   check('inside allowed path works', (await call(dir(DESKTOP))).json.success === true);
   check('outside allowed path blocked', !(await call(dir('C:/Windows'))).json.success);
   check('traversal blocked', !(await call(dir(DESKTOP + '/../../../Windows'))).json.success);
+  // גבול תחילית. נבדק על כתיבה ולא על קריאה: מאז שתחום הקריאה נפרד מתחום
+  // הכתיבה, קריאה עשויה להיות רחבה בכוונה - אבל תיקייה אחות שרק חולקת
+  // תחילית עם התחום המותר לעולם אינה חלק ממנו לצורך שינוי.
   const sibling = DESKTOP + 'Evil';
   fs.mkdirSync(sibling, { recursive: true });
-  const sib = await call(dir(sibling));
-  check('sibling dir sharing a prefix is blocked', !(sib.json && sib.json.success), 'got ' + sib.status);
-  fs.rmdirSync(sibling);
+  const sib = await call({
+    action: 'write_file',
+    params: { path: sibling + '/probe.txt', content: 'x' },
+    permissions: { writeFiles: true, readScope: 'everything' }
+  });
+  check('a sibling dir sharing a prefix cannot be written to',
+        !(sib.json && sib.json.success), 'got ' + sib.status);
+  check('and nothing was actually written there',
+        fs.existsSync(sibling + '/probe.txt') === false);
+  fs.rmSync(sibling, { recursive: true, force: true });
 
   console.log('');
   console.log('=== open_app shell injection ===');

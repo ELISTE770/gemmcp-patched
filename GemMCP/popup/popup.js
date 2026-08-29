@@ -518,7 +518,14 @@ document.addEventListener('DOMContentLoaded', () => {
         writeFiles: winPermWrite ? winPermWrite.checked : false,
         runCommands: winPermCommand ? winPermCommand.checked : false,
         launchApps: winPermApp ? winPermApp.checked : true,
-        clipboard: winPermClipboard ? winPermClipboard.checked : true
+        clipboard: winPermClipboard ? winPermClipboard.checked : true,
+        // היקף הקריאה נשלח כשם ולא כנתיב: השרת ממפה אותו בעצמו, כדי שהלקוח
+        // לא יוכל להמציא נתיב משלו אלא רק לבחור מרשימה שהשרת מגדיר.
+        readScope: (() => {
+          const el = document.getElementById('win-read-scope');
+          const v = el && el.value;
+          return ['desktop', 'home', 'everything'].includes(v) ? v : 'desktop';
+        })()
       };
 
       // שרת Custom MCP ראשי ראשון לתאימות אחורה
@@ -792,6 +799,12 @@ document.addEventListener('DOMContentLoaded', () => {
       const scope = data.autoRunScope === 'all' ? 'all' : 'read';
       const scopeRadio = document.getElementById(scope === 'all' ? 'run-mode-all' : 'run-mode-read');
       if (scopeRadio) scopeRadio.checked = true;
+
+      const readScopeSel = document.getElementById('win-read-scope');
+      if (readScopeSel) {
+        const rs = data.winPermissions && data.winPermissions.readScope;
+        readScopeSel.value = ['desktop', 'home', 'everything'].includes(rs) ? rs : 'desktop';
+      }
 
       if (Array.isArray(data.customServers)) {
         customServers = data.customServers;

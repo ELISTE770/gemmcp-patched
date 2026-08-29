@@ -57,7 +57,10 @@ function createFileActions(deps) {
     copy_file(params) {
       needWrite();
       if (!params.from || !params.to) fail('חסרים פרמטרים from / to');
-      const from = validatePathInScope(params.from);
+      // המקור רק נקרא, ולכן הוא כפוף לתחום הקריאה. היעד נכתב, והוא כפוף
+      // לתחום הכתיבה. כך אפשר להעתיק קובץ מכל מקום אל התיקייה המורשית,
+      // בלי לפתוח את המקור גם לשינוי.
+      const from = validatePathInScope(params.from, 'read');
       const to = validatePathInScope(params.to);
       if (!fs.existsSync(from)) fail(`המקור אינו קיים: ${params.from}`, 404);
 
@@ -137,7 +140,7 @@ function createFileActions(deps) {
       needRead();
       // ברירת מחדל: התחום המותר, ולא תיקיית העבודה של השרת. '.' היה מתפרש
       // כתיקיית bridge-server, שאין שום סיבה שהמודל יסרוק אותה.
-      const root = validatePathInScope(params.path || perms.allowedPath || '.');
+      const root = validatePathInScope(params.path || perms.readPath || perms.allowedPath || '.', 'read');
       if (!fs.existsSync(root)) fail(`התיקייה אינה קיימת: ${params.path}`, 404);
 
       let pattern = String(params.pattern || '*');

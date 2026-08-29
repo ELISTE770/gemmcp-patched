@@ -58,6 +58,38 @@ const plan = (steps) => post('/api/windows/plan', { plan: steps });
     WORK = path.join(DESKTOP, '_gemmcp_test');
   }
 
+  // ---- הפרדה בין תחום קריאה לתחום כתיבה ----
+  console.log('');
+  console.log('=== read scope is separate from write scope ===');
+
+  // קודם נתיב אחד שלט בשניהם, ולכן כדי לקרוא קובץ מ-Downloads היה צריך
+  // לפתוח את Downloads גם למחיקה. קריאה הפיכה, מחיקה לא.
+  const wide = { readScope: 'everything', writeFiles: true };
+  // לא קובץ מערכת: אלה חסומים תמיד. קובץ של המשתמש מחוץ לתחום הכתיבה.
+  const outsideFile = path.join(process.env.USERPROFILE || '', 'Downloads');
+
+  const readWide = await post('/api/windows/execute',
+    { action: 'list_directory', params: { path: outsideFile }, permissions: wide });
+  check('with a wide read scope, a folder outside the write path is readable',
+        readWide.json.success === true, readWide.json.error);
+
+  const readNarrow = await post('/api/windows/execute',
+    { action: 'list_directory', params: { path: outsideFile }, permissions: { readScope: 'desktop' } });
+  check('with the narrow read scope, the same folder is refused',
+        readNarrow.json.success === false);
+
+  // זה הלב: היקף קריאה רחב אינו פותח כתיבה.
+  const writeWide = await post('/api/windows/execute',
+    { action: 'write_file',
+      params: { path: path.join(process.env.USERPROFILE || '', 'Downloads', '_scope_probe.txt'), content: 'x' },
+      permissions: wide });
+  check('a wide read scope does NOT open writing outside the allowed path',
+        writeWide.json.success === false, writeWide.json.error);
+
+  const writeInside = await post('/api/windows/execute',
+    { action: 'write_file', params: { path: path.join(WORK, 'inside.txt'), content: 'x' }, permissions: wide });
+  check('writing inside the allowed path still works', writeInside.json.success === true, writeInside.json.error);
+
   // ניקוי מצב קודם והכנת סביבת עבודה
   fs.rmSync(WORK, { recursive: true, force: true });
   fs.mkdirSync(WORK, { recursive: true });
@@ -300,6 +332,7 @@ const plan = (steps) => post('/api/windows/plan', { plan: steps });
   const outsideTilde = await run('list_directory', { path: '~/AppData' });
   check('~ does not bypass the ceiling', outsideTilde.json.success === false);
 
+
   // ניקוי
   fs.rmSync(WORK, { recursive: true, force: true });
 
@@ -315,3 +348,6 @@ const plan = (steps) => post('/api/windows/plan', { plan: steps });
   console.log('');
   process.exit(fail ? 1 : 0);
 })();
+
+
+

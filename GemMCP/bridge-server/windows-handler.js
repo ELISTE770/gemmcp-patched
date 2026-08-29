@@ -26,7 +26,7 @@ Write-Output "GEMMCP_FRONT $p $parent"
 `;
 
 async function handleWindowsExecute(req, res, deps) {
-  const { resolvePermissions, auditLog, canonicalise, expandPath, isPathInside, checkDangerousWindowsCommands } = deps;
+  const { resolvePermissions, auditLog, canonicalise, expandPath, isPathInside, isSystemPath, checkDangerousWindowsCommands } = deps;
   try {
     const { action, params = {}, permissions = {} } = req.body;
     const perms = resolvePermissions(permissions);
@@ -42,13 +42,31 @@ async function handleWindowsExecute(req, res, deps) {
       return originalJson(body);
     };
 
-    // בדיקת נתיב מותר (Allowed Directory Scope)
-    function validatePathInScope(targetPath) {
+    // בדיקת נתיב מותר. שני תחומים נפרדים: קריאה וכתיבה.
+    //
+    // קודם נתיב אחד שלט בשניהם, ולכן כדי לקרוא קובץ מ-Downloads היה צריך
+    // לפתוח את Downloads גם למחיקה. קריאה הפיכה, מחיקה לא - אין סיבה
+    // שהאחת תגרור את השנייה.
+    function validatePathInScope(targetPath, mode) {
       if (!targetPath) return;
       const resolved = canonicalise(path.resolve(expandPath(targetPath)));
-      const ceiling = perms.allowedPath ? canonicalise(perms.allowedPath) : null;
+
+      // תיקיות מערכת חסומות תמיד, לפני כל בדיקת היקף. "כל המחשב" פירושו כל
+      // מה ששייך למשתמש - לא Windows, לא Program Files ולא ProgramData.
+      if (typeof isSystemPath === 'function' && isSystemPath(resolved)) {
+        throw new Error(`הגישה לנתיב '${targetPath}' נחסמה: תיקיות מערכת חסומות תמיד, בכל היקף.`);
+      }
+
+      const reading = mode === 'read';
+      const ceilingRaw = reading ? perms.readPath : perms.allowedPath;
+      const ceiling = ceilingRaw ? canonicalise(ceilingRaw) : null;
+
       if (ceiling && !isPathInside(resolved, ceiling)) {
-        throw new Error(`הגישה לנתיב '${targetPath}' נחסמה. הנתיב המורשה בהגדרות השרת הוא: ${perms.allowedPath}`);
+        throw new Error(
+          reading
+            ? `הגישה לנתיב '${targetPath}' נחסמה. היקף הקריאה בהגדרות הוא: ${ceilingRaw}`
+            : `הגישה לנתיב '${targetPath}' נחסמה. הנתיב המורשה לשינויים הוא: ${ceilingRaw}`
+        );
       }
       return resolved;
     }
@@ -338,7 +356,7 @@ Write-Output "GEMMCP_TARGET_PIDS $($kin -join ',') $($proc.ProcessName)"
         if (!params.path) {
           return res.status(400).json({ success: false, error: 'חסר פרמטר path של הקובץ לקריאה' });
         }
-        const filePath = validatePathInScope(params.path);
+        const filePath = validatePathInScope(params.path, 'read');
         if (!fs.existsSync(filePath)) {
           return res.status(404).json({ success: false, error: `הקובץ אינו קיים: ${params.path}` });
         }
@@ -368,7 +386,7 @@ Write-Output "GEMMCP_TARGET_PIDS $($kin -join ',') $($proc.ProcessName)"
         if (!perms.readFiles) {
           return res.status(403).json({ success: false, error: 'הרשאת קריאת קבצים ותיקיות (WIN_PERM_READ) כבויה בשרת.' });
         }
-        const dirPath = validatePathInScope(params.path || perms.allowedPath || process.cwd());
+        const dirPath = validatePathInScope(params.path || perms.readPath || perms.allowedPath || process.cwd(), 'read');
         if (!fs.existsSync(dirPath)) {
           return res.status(404).json({ success: false, error: `התיקייה אינה קיימת: ${params.path}` });
         }
