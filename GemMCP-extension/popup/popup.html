@@ -44,6 +44,35 @@
     <p class="subtitle" data-i18n="subtitle">חיבור שירותי MCP חיצוניים ישירות ל-Gemini</p>
   </div>
 
+  <!-- מצב הרצה: הגדרה גלובלית לכל השירותים ולכל השיחות, ולכן היא יושבת כאן
+       ולא בתוך כרטיס של שירות מסוים. נשמרת ב-chrome.storage.sync. -->
+  <div class="service-card" id="run-mode-card">
+    <div class="service-body" style="display:block;">
+      <div class="permissions-header-box">
+        <span class="perm-badge" data-i18n="runModeHeader">🎚️ מצב הרצה</span>
+        <p class="perm-desc" data-i18n="runModeSub">מתי ג'מיני רשאי לבצע פעולה בלי לעצור ולשאול אותך:</p>
+      </div>
+
+      <div class="permissions-grid">
+        <label class="perm-checkbox-row">
+          <input type="radio" name="run-mode" id="run-mode-read" value="read" checked>
+          <div class="perm-text">
+            <span class="perm-title" data-i18n="runModeSafeTitle">🛡️ בטוח</span>
+            <span class="perm-sub" data-i18n="runModeSafeSub">רק פעולות קריאה רצות לבד. כל פעולה שמשנה משהו - כתיבה, מחיקה, הרצת פקודה, תוכנית - נעצרת לאישור.</span>
+          </div>
+        </label>
+
+        <label class="perm-checkbox-row">
+          <input type="radio" name="run-mode" id="run-mode-all" value="all">
+          <div class="perm-text">
+            <span class="perm-title" data-i18n="runModeAutoTitle">⚡ אוטונומי</span>
+            <span class="perm-sub" data-i18n="runModeAutoSub">הכל רץ בלי לשאול, כולל מחיקה והרצת פקודות. ההרשאות שלמטה עדיין חלות, וכך גם התיקייה המורשית בשרת.</span>
+          </div>
+        </label>
+      </div>
+    </div>
+  </div>
+
   <!-- רשימת שירותים מתרחבת עם התחברות בקליק + ידנית -->
   <div class="services-list">
     

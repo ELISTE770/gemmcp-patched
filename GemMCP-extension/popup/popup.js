@@ -209,6 +209,16 @@ document.addEventListener('DOMContentLoaded', () => {
   const testWindowsBtn = document.getElementById('testWindowsBtn');
   const stopWindowsBridgeBtn = document.getElementById('stopWindowsBridgeBtn');
 
+  // מצב הרצה. נשמר לבדו ולא דרך מסלול השמירה של השירותים, כדי שלא ייגרר
+  // לשמירה חלקית של דברים אחרים. הפאנל בדף מאזין לאותו מפתח ומתעדכן מיד.
+  document.querySelectorAll('input[name="run-mode"]').forEach((radio) => {
+    radio.addEventListener('change', () => {
+      if (!radio.checked) return;
+      const autoRunScope = radio.value === 'all' ? 'all' : 'read';
+      chrome.storage.sync.set({ autoRunScope });
+    });
+  });
+
   // OAuth & Disconnect Buttons
   const oauthSupabaseBtn = document.getElementById('oauthSupabaseBtn');
   const oauthNotionBtn = document.getElementById('oauthNotionBtn');
@@ -776,6 +786,12 @@ document.addEventListener('DOMContentLoaded', () => {
         if (winPermApp) winPermApp.checked = data.winPermissions.launchApps !== false;
         if (winPermClipboard) winPermClipboard.checked = data.winPermissions.clipboard !== false;
       }
+
+      // מצב ההרצה. אותו מפתח שהפאנל בדף קורא, ולכן שינוי כאן משתקף שם מיד
+      // ולהפך - יש רק מקור אמת אחד, ולא שתי הגדרות שיכולות להיפרד.
+      const scope = data.autoRunScope === 'all' ? 'all' : 'read';
+      const scopeRadio = document.getElementById(scope === 'all' ? 'run-mode-all' : 'run-mode-read');
+      if (scopeRadio) scopeRadio.checked = true;
 
       if (Array.isArray(data.customServers)) {
         customServers = data.customServers;
