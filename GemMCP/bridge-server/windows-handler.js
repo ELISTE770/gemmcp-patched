@@ -183,16 +183,14 @@ public class ForceFocus {
         SetForegroundWindow(targetHWnd);
         SwitchToThisWindow(targetHWnd, true);
 
-        // אם עד כאן לא הצליח, מנסים מזעור ושחזור. שחזור מחלון ממוזער הוא
-        // מסלול שהמערכת מתירה גם לתהליך רקע, בניגוד ל-SetForegroundWindow.
-        // לא נוגעים ב-SPI_SETFOREGROUNDLOCKTIMEOUT: זו הגדרת מערכת של
-        // המשתמש, ואין זה מקומו של הכלי הזה לשנות אותה בשקט.
-        if (GetForegroundWindow() != targetHWnd) {
-            ShowWindow(targetHWnd, 6);   // SW_MINIMIZE
-            System.Threading.Thread.Sleep(120);
-            ShowWindow(targetHWnd, 9);   // SW_RESTORE
-            SetForegroundWindow(targetHWnd);
-        }
+        // כאן היה ניסיון של מזעור ושחזור, והוא הזיק. ההשוואה
+        // GetForegroundWindow() != targetHWnd נכשלת כשהחלון שבחזית הוא חלון
+        // בן של האפליקציה ולא החלון הראשי - וזה המצב הרגיל באפליקציה מודרנית.
+        // התוצאה: החלון שכבר שוחזר בהצלחה מוזער בחזרה מיד אחרי.
+        //
+        // אומת שקריאה בודדת ל-SW_RESTORE מספיקה: היא הוציאה את החלון ממצב
+        // ממוזער והביאה אותו לחזית, בלי שום טכניקה נוספת. לכן לא נוגעים
+        // בחלון יותר אחרי השחזור שבתחילת הפונקציה.
 
         if (foreThread != curThread) {
             AttachThreadInput(curThread, foreThread, false);
@@ -310,11 +308,15 @@ Write-Output "GEMMCP_TARGET_PIDS $($kin -join ',') $($proc.ProcessName)"
                         data: { message: `חלון ${appName} נמצא כעת בחזית.` }
                       }));
                     }
+                    // החלון כן שוחזר ממצב ממוזער - זה תמיד עובד. מה שלא
+                    // תמיד מצליח הוא להשאיר אותו בחזית, כי אפליקציה אחרת
+                    // עשויה לקחת את המיקוד בחזרה. מבחינים בין השניים, אחרת
+                    // ההודעה משתמעת כאילו כלום לא קרה.
                     resolve(res.json({
                       success: false,
-                      error: `נמצא חלון של '${appName}' (${procName}), אבל Windows לא העביר אותו לחזית. ` +
-                             'המערכת מתירה החלפת חלון בחזית רק לתוכנה שכבר בחזית, והגשר רץ ברקע. ' +
-                             'לחיצה על סמל התוכנה בשורת המשימות תעבוד.'
+                      error: `החלון של '${appName}' (${procName}) נפתח, אבל תוכנה אחרת לקחה את המיקוד ` +
+                             'מיד אחר כך. Windows מתיר להעביר חלון לחזית רק לתוכנה שכבר בחזית, ' +
+                             'והגשר רץ ברקע. החלון פתוח - לחיצה עליו בשורת המשימות תמקד אותו.'
                     }));
                   });
                 // 2.5 שניות ולא פחות. אומת במדידה: החלון אכן עולה לחזית
