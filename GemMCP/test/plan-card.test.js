@@ -138,6 +138,17 @@ check('autonomous: a multi-step plan runs too',
 check('autonomous: an unknown action runs too',
       requiresExplicitApproval('windows', { action: 'something_new' }) === false);
 
+// הורדה והתקנה מסומנת alwaysAsk. זו הפעולה היחידה שגוברת על המצב שנבחר,
+// כי היא מריצה קובץ ממקור שאינו בשליטת המשתמש. אם מישהו יסיר את הדגל
+// בטעות, הבדיקה הזו תיפול.
+check('autonomous: install_from_url STILL asks',
+      requiresExplicitApproval('windows', { action: 'install_from_url' }) === true);
+check('autonomous: a plain download does not ask',
+      requiresExplicitApproval('windows', { action: 'download_file' }) === false);
+check('safe mode: install_from_url asks too',
+      (globalThis.autoRunScope = 'read',
+       requiresExplicitApproval('windows', { action: 'install_from_url' })) === true);
+globalThis.autoRunScope = 'all';
 globalThis.autoRunScope = 'read';   // מחזירים לברירת המחדל
 
 console.log('');
@@ -164,3 +175,4 @@ if (fail) { console.log(''); failures.forEach(f => console.log('   - ' + f)); }
 console.log('================================================');
 console.log('');
 process.exit(fail ? 1 : 0);
+
