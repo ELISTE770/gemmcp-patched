@@ -1023,10 +1023,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     chrome.storage.sync.get(['customServers', 'customToolPrompts'], (stored) => {
-      const toolPrompts = stored.customToolPrompts || customToolPrompts || {};
-      const promptText = generateOmniSystemPrompt(activeServices, stored.customServers || [], toolPrompts);
-      setInputValueAndSend(inputField, promptText);
-      addLog(`הוזרקו הנחיות עבור: ${activeServices.join(', ')}`);
+      // שגיאה כאן יושבת בתוך callback, ולכן היא לא עוצרת כלום ולא מגיעה לשום
+      // מקום שרואים. כך בדיוק נעלמה ההפעלה: ReferenceError נזרק בשקט מוחלט,
+      // בלי שורת יומן ובלי שגיאה בקונסולה, וההתנהגות נראתה כמו "הכפתור מת".
+      try {
+        const toolPrompts = stored.customToolPrompts || customToolPrompts || {};
+        const promptText = generateOmniSystemPrompt(activeServices, stored.customServers || [], toolPrompts);
+        setInputValueAndSend(inputField, promptText);
+        addLog(`הוזרקו הנחיות עבור: ${activeServices.join(', ')}`);
+      } catch (err) {
+        console.error('[GemMCP] ההפעלה נכשלה:', err);
+        addLog(`ההפעלה נכשלה: ${err && err.message}`, { error: true });
+      }
     });
   }
 
@@ -1109,6 +1117,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       activeSendInterval = null;
     }
 
+    // הצ'אט שבו הלולאה נפתחה. ג'מיני הוא אפליקציית עמוד יחיד, ולכן מעבר לשיחה
+    // אחרת לא טוען מחדש את הסקריפט והאינטרוול שורד. בלי העוגן הזה, לולאה
+    // שנמשכת עד 90 שניות המשיכה להזריק לתוך הקומפוזר של השיחה החדשה - כלומר
+    // הפרומפט הופיע בצ'אט שבו המשתמש כלל לא הפעיל אותו.
+    //
+    // ההצהרה חייבת להיות כאן, לפני injectText: היא const, ו-injectText נקראת
+    // מיד אחרי ההגדרה שלה. כשהיא ישבה למטה, הקריאה הראשונה נפלה על
+    // ReferenceError בתוך callback - כלומר בשקט מוחלט, וההפעלה פשוט לא עשתה
+    // כלום. בלי שגיאה בקונסולה ובלי שום סימן.
+    const startedInChat = location.pathname;
+
     function injectText() {
       if (!target || !document.body.contains(target)) {
         const newTarget = findGeminiInputField();
@@ -1128,11 +1147,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     injectText();
 
     let attempts = 0;
-    // הצ'אט שבו הלולאה נפתחה. ג'מיני הוא אפליקציית עמוד יחיד, ולכן מעבר לשיחה
-    // אחרת לא טוען מחדש את הסקריפט והאינטרוול שורד. בלי העוגן הזה, לולאה
-    // שנמשכת עד 90 שניות המשיכה להזריק לתוך הקומפוזר של השיחה החדשה - כלומר
-    // הפרומפט הופיע בצ'אט שבו המשתמש כלל לא הפעיל אותו.
-    const startedInChat = location.pathname;
     // האם כבר ניסינו לשלוח. בלי זה, פעימה שרואה תיבה ריקה אחרי שליחה מוצלחת
     // מפרשת את ההצלחה ככישלון ומזריקה את כל הפרומפט מחדש.
     let sendAttempted = false;
