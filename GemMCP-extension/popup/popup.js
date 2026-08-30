@@ -4,6 +4,12 @@
  */
 
 document.addEventListener('DOMContentLoaded', () => {
+  try {
+    const vf = document.getElementById('version-footer');
+    if (vf && chrome.runtime && chrome.runtime.getManifest) {
+      vf.textContent = 'v' + chrome.runtime.getManifest().version;
+    }
+  } catch (e) { /* the footer is decoration; never let it break the popup */ }
   // i18n Initializer & Language Toggle Button
   const langToggleBtn = document.getElementById('langToggleBtn');
   let currentLang = (typeof detectSystemLanguage === 'function') ? detectSystemLanguage() : 'he';
@@ -36,6 +42,11 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       }
     });
+
+    const builtByLink = document.getElementById('built-by-link');
+    if (builtByLink) {
+      builtByLink.href = isRtl ? 'https://ivrit.smartbinary.org' : 'https://smartbinary.org';
+    }
 
     // Update dynamic labels
     const lblWindows = document.getElementById('lbl-prompt-windows');

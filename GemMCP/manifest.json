@@ -3,7 +3,7 @@
   "name": "GemMCP (SB)",
   "version": "1.2.4",
   "version_name": "1.2.4",
-  "description": "חבר שירותי MCP (Supabase, GitHub, Web Scraper, Custom MCP) ישירות ל-Google Gemini Web. גרסה מתוקנת: 5 תיקוני באגים, /api/update הוסר, אישור פעולה כברירת מחדל.",
+  "description": "מחבר את Google Gemini Web למחשב ולשירותי MCP (Supabase, GitHub, Web Scraper) עם אישור לכל פעולה.",
   "permissions": [
     "storage",
     "activeTab",

@@ -40,6 +40,10 @@ const I18N_DICT = {
     winPermWriteSub: 'מאפשר לג\'מיני ליצור קבצים חדשים או לשנות קבצים קיימים',
     winPermCmdTitle: '⚡ הרצת פקודות PowerShell / CMD',
     winPermCmdSub: 'הרצת סקריפטים, התקנת חבילות ופקודות טרמינל. שים לב: זו ההרשאה היחידה שאינה כלואה בתיקייה המורשית - פקודה יכולה לגעת בכל מקום במחשב.',
+    builtByPrefix: 'נבנה על ידי',
+
+    builtByName: 'בינארי חכם',
+
     bridgeTokenLabel: 'טוקן אימות הגשר',
     // מצב הרצה, היקף קריאה, הפעלה לפי שיחה והתקנה - נוספו יחד עם התכונות
     // עצמן. בלי הערכים האלה הפופאפ הציג את שמות המפתחות למשתמש.
@@ -214,6 +218,10 @@ const I18N_DICT = {
     winPermWriteSub: 'Allows Gemini to create new files or modify existing files',
     winPermCmdTitle: '⚡ Run PowerShell / CMD Commands',
     winPermCmdSub: 'Execute terminal scripts, install packages and run CLI commands. Note: this is the one permission the allowed-folder limit cannot contain - a command can reach anywhere on the machine.',
+    builtByPrefix: 'Built by',
+
+    builtByName: 'Smart Binary',
+
     bridgeTokenLabel: 'Bridge auth token',
     runModeHeader: '🎚️ Run mode',
     runModeSub: 'When Gemini may act without stopping to ask you:',
