@@ -909,6 +909,44 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     container.appendChild(card);
   }
 
+  // זיהוי סירוב של המודל.
+  //
+  // Gemini 3.1 Pro מסרב לפרומפט ההפעלה ועונה משהו בסגנון "I cannot adopt this
+  // setup". בלי לזהות את זה, המשתמש רואה שכלום לא עובד ומסיק שהכלי שבור -
+  // בזמן שכל מה שצריך הוא להחליף דגם. Flash מקבל את הפרומפט.
+  const REFUSAL_MARKERS = [
+    'cannot adopt', 'can not adopt', "can't adopt",
+    'cannot output json', 'unable to interact with external',
+    'i am an ai assistant designed to help with information',
+    'לא אוכל לאמץ', 'אינני יכול לבצע פעולות'
+  ];
+
+  function watchForModelRefusal() {
+    let checks = 0;
+    const timer = setInterval(() => {
+      if (++checks > 20) { clearInterval(timer); return; }
+      const main = document.querySelector('main') || document.body;
+      const tail = (main.innerText || '').slice(-1500).toLowerCase();
+      if (tail.includes('מוכן')) { clearInterval(timer); return; }
+      if (REFUSAL_MARKERS.some((m) => tail.includes(m))) {
+        clearInterval(timer);
+        const model = readSelectedModel();
+        addLog(
+          'הדגם' + (model ? ' (' + model + ')' : '') + ' סירב להפעלה. זו מגבלה של הדגם ולא תקלה בתוסף - ' +
+          'עבור ל-Flash בבורר הדגמים של ג׳מיני והפעל שוב.',
+          { error: true }
+        );
+      }
+    }, 1500);
+  }
+
+  // שם הדגם כפי שג'מיני מציג אותו ליד תיבת ההודעה.
+  function readSelectedModel() {
+    const el = [...document.querySelectorAll('button, [role="button"]')]
+      .find((b) => /^(pro|flash|flash-lite|extended thinking)\b/i.test((b.innerText || '').trim()));
+    return el ? el.innerText.trim().split(String.fromCharCode(10))[0] : '';
+  }
+
   function wireScopeControl() {
     const chips = document.querySelectorAll('#omni-mcp-scope-chips .omni-service-chip');
     if (!chips.length) return;
@@ -1115,6 +1153,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const promptText = generateOmniSystemPrompt(activeServices, stored.customServers || [], toolPrompts);
         setInputValueAndSend(inputField, promptText);
         addLog(`הוזרקו הנחיות עבור: ${activeServices.join(', ')}`);
+        watchForModelRefusal();
       } catch (err) {
         console.error('[GemMCP] ההפעלה נכשלה:', err);
         addLog(`ההפעלה נכשלה: ${err && err.message}`, { error: true });
@@ -2137,7 +2176,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         isExecuting = false;
         setBadgeBusy(false);
       }
-    }, 35000);
+    }, 45000);
 
     addLog(`מבצע שירות [${service}]...`);
 
@@ -2286,8 +2325,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const WINDOWS_SCHEMA = `Format response strictly as a JSON object for Windows OS:
 - open_app: {"service": "windows", "action": "open_app", "app_name": "<name>"}
 - list_directory: {"service": "windows", "action": "list_directory", "path": "<path e.g. ~/Downloads, ~/Desktop, C:\\...>"}
+- find_files: {"service": "windows", "action": "find_files", "path": "<path>", "pattern": "<glob e.g. *.pdf>"}
 - read_file: {"service": "windows", "action": "read_file", "path": "<path>"}
 - write_file: {"service": "windows", "action": "write_file", "path": "<path>", "content": "<text>"}
+- make_dir: {"service": "windows", "action": "make_dir", "path": "<path>"}
+- copy_file: {"service": "windows", "action": "copy_file", "from": "<source>", "to": "<target>", "overwrite": false}
+- move_file: {"service": "windows", "action": "move_file", "from": "<source>", "to": "<target>", "overwrite": false}
+- delete_file: {"service": "windows", "action": "delete_file", "path": "<path>", "recursive": false}
 - run_command: {"service": "windows", "action": "run_command", "command": "<powershell_command>"}
 - clipboard_read: {"service": "windows", "action": "clipboard_read"}
 - clipboard_write: {"service": "windows", "action": "clipboard_write", "text": "<text>"}`;

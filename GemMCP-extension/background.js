@@ -788,7 +788,8 @@ async function executeWindowsMcp(toolCall, config) {
     launchApps: config?.winPermissions?.launchApps ?? true,
     clipboard: config?.winPermissions?.clipboard ?? true,
     allowedPath: config?.winAllowedPath || null,
-    readScope: config?.winPermissions?.readScope ?? 'desktop'
+    readScope: config?.winPermissions?.readScope ?? 'desktop',
+    allowInstall: config?.winPermissions?.allowInstall ?? false
   };
 
   if (isPlan) {
@@ -807,15 +808,23 @@ async function executeWindowsMcp(toolCall, config) {
     return data.data;
   }
 
+  const incomingParams = (toolCall.params && typeof toolCall.params === 'object') ? toolCall.params : toolCall;
+  const mergedParams = { ...incomingParams };
+  delete mergedParams.action;
+  delete mergedParams.tool_name;
+  delete mergedParams.tool;
+  delete mergedParams.service;
+  delete mergedParams.plan;
+
+  if (toolCall.command || toolCall.cmd) mergedParams.command = toolCall.command || toolCall.cmd;
+  if (toolCall.app_name || toolCall.app) mergedParams.app_name = toolCall.app_name || toolCall.app;
+  if (toolCall.path || toolCall.file) mergedParams.path = toolCall.path || toolCall.file;
+  if (toolCall.content !== undefined) mergedParams.content = toolCall.content;
+  if (toolCall.text !== undefined) mergedParams.text = toolCall.text;
+
   const payload = {
     action: action,
-    params: {
-      path: toolCall.path,
-      content: toolCall.content,
-      command: toolCall.command || toolCall.cmd,
-      app_name: toolCall.app_name || toolCall.app,
-      text: toolCall.text
-    },
+    params: mergedParams,
     permissions: {
       readFiles: config?.winPermissions?.readFiles ?? true,
       writeFiles: config?.winPermissions?.writeFiles ?? false,
@@ -823,7 +832,8 @@ async function executeWindowsMcp(toolCall, config) {
       launchApps: config?.winPermissions?.launchApps ?? true,
       clipboard: config?.winPermissions?.clipboard ?? true,
       allowedPath: config?.winAllowedPath || null,
-      readScope: config?.winPermissions?.readScope ?? 'desktop'
+      readScope: config?.winPermissions?.readScope ?? 'desktop',
+      allowInstall: config?.winPermissions?.allowInstall ?? false
     }
   };
 
@@ -1021,10 +1031,18 @@ async function executeGitHub(toolCall, config) {
     const data = await res.json();
     
     if (data.content) {
+      let decodedContent = '';
+      try {
+        const binStr = atob(data.content.replace(/\s/g, ''));
+        const bytes = Uint8Array.from(binStr, c => c.charCodeAt(0));
+        decodedContent = new TextDecoder('utf-8').decode(bytes);
+      } catch (e) {
+        decodedContent = atob(data.content.replace(/\s/g, ''));
+      }
       return {
         path: data.path,
         size: data.size,
-        content: decodeURIComponent(escape(atob(data.content.replace(/\s/g, ''))))
+        content: decodedContent
       };
     }
     return data;

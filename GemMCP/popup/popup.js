@@ -205,6 +205,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const winPermWrite = document.getElementById('win-perm-write');
   const winPermCommand = document.getElementById('win-perm-command');
   const winPermApp = document.getElementById('win-perm-app');
+  const winPermInstall = document.getElementById('win-perm-install');
   const winPermClipboard = document.getElementById('win-perm-clipboard');
   const testWindowsBtn = document.getElementById('testWindowsBtn');
   const stopWindowsBridgeBtn = document.getElementById('stopWindowsBridgeBtn');
@@ -525,6 +526,7 @@ document.addEventListener('DOMContentLoaded', () => {
         writeFiles: winPermWrite ? winPermWrite.checked : false,
         runCommands: winPermCommand ? winPermCommand.checked : false,
         launchApps: winPermApp ? winPermApp.checked : true,
+        allowInstall: winPermInstall ? winPermInstall.checked : false,
         clipboard: winPermClipboard ? winPermClipboard.checked : true,
         // היקף הקריאה נשלח כשם ולא כנתיב: השרת ממפה אותו בעצמו, כדי שהלקוח
         // לא יוכל להמציא נתיב משלו אלא רק לבחור מרשימה שהשרת מגדיר.
@@ -798,6 +800,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (winPermWrite) winPermWrite.checked = !!data.winPermissions.writeFiles;
         if (winPermCommand) winPermCommand.checked = !!data.winPermissions.runCommands;
         if (winPermApp) winPermApp.checked = data.winPermissions.launchApps !== false;
+        if (winPermInstall) winPermInstall.checked = !!data.winPermissions.allowInstall;
         if (winPermClipboard) winPermClipboard.checked = data.winPermissions.clipboard !== false;
       }
 

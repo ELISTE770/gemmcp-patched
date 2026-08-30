@@ -659,7 +659,16 @@ const SERVER_CEILING = {
   writeFiles: process.env.WIN_PERM_WRITE === 'true',
   runCommands: process.env.WIN_PERM_COMMANDS === 'true',
   launchApps: process.env.WIN_PERM_APPS !== 'false',
-  clipboard: process.env.WIN_PERM_CLIPBOARD !== 'false'
+  clipboard: process.env.WIN_PERM_CLIPBOARD !== 'false',
+  // הורדה והרצה של קובץ מהרשת.
+  //
+  // התקרה כאן פתוחה, והבקרה בפועל היא תיבת הסימון בפופאפ - כבויה כברירת
+  // מחדל. הסיבה שזה שונה משאר ההרשאות: תקרה סגורה כאן מחייבת עריכת קובץ
+  // כדי להדליק, וזה לא מה שנדרש מהמשתמש עבור פעולה שממילא עוצרת לאישור
+  // בכל פעם וניתנת לביטול.
+  //
+  // מי שרוצה להשבית לגמרי, בלי תלות בתוסף: WIN_PERM_INSTALL=false ב-.env.
+  allowInstall: process.env.WIN_PERM_INSTALL !== 'false'
 };
 
 // נתיב ריק פירושו כעת "חסום", לא "כל הדיסק". פתיחת הדיסק כולו דורשת הצהרה
@@ -769,6 +778,7 @@ function resolvePermissions(clientPerms = {}) {
     runCommands: narrow(SERVER_CEILING.runCommands, clientPerms.runCommands),
     launchApps: narrow(SERVER_CEILING.launchApps, clientPerms.launchApps),
     clipboard: narrow(SERVER_CEILING.clipboard, clientPerms.clipboard),
+    allowInstall: narrow(SERVER_CEILING.allowInstall, clientPerms.allowInstall),
     allowedPath,
     readPath
   };
