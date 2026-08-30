@@ -46,8 +46,15 @@
 
   <!-- מצב הרצה: הגדרה גלובלית לכל השירותים ולכל השיחות, ולכן היא יושבת כאן
        ולא בתוך כרטיס של שירות מסוים. נשמרת ב-chrome.storage.sync. -->
-  <div class="service-card" id="run-mode-card">
-    <div class="service-body" style="display:block;">
+  <!-- 'open' דרוש כאן, ואינו קישוט: .service-body מוסתר ב-max-height:0 ובאטימות
+       אפס, ורק .service-card.open פותח אותו. בלי המחלקה הזו כל הכרטיס היה
+       בלתי נראה - כולל בורר המצב והמתג שמתחתיו - ו-display:block מוטבע לא
+       עוזר, כי לא display הוא שמסתיר. לכרטיס הזה גם אין כותרת ללחוץ עליה,
+       ולכן אין דרך לפתוח אותו ידנית. -->
+  <div class="service-card open" id="run-mode-card">
+    <!-- max-height:none כי הכלל של .open קוצב ל-600px, וכרטיס עם שתי אפשרויות
+         והסבריהן ועוד מתג עלול לחרוג ולהיחתך בשקט. -->
+    <div class="service-body" style="max-height:none;">
       <div class="permissions-header-box">
         <span class="perm-badge" data-i18n="runModeHeader">🎚️ מצב הרצה</span>
         <p class="perm-desc" data-i18n="runModeSub">מתי ג'מיני רשאי לבצע פעולה בלי לעצור ולשאול אותך:</p>

@@ -293,12 +293,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             <div style="display:flex; flex-direction:column; gap:6px; margin-top:6px;">
               <textarea id="omni-mcp-schedule-text" rows="2" placeholder="מה לשלוח לג'מיני"
                 style="width:100%; box-sizing:border-box; resize:vertical; font-size:11.5px; padding:6px;
-                       border-radius:6px; border:1px solid #334155; background:#0f172a; color:#e2e8f0;"></textarea>
-              <div style="display:flex; gap:6px; align-items:center;">
+                style="width:100%; box-sizing:border-box; resize:vertical; font-size:11.5px; padding:7px;
+                       border-radius:7px; border:1px solid #d5dbe3; background:#fff; color:#1e293b; font-family:inherit;"></textarea>
                 <input id="omni-mcp-schedule-min" type="number" min="1" max="43200" value="30"
                   style="width:74px; font-size:11.5px; padding:5px; border-radius:6px;
-                         border:1px solid #334155; background:#0f172a; color:#e2e8f0;">
-                <span style="font-size:11px; color:#94a3b8;">דקות מעכשיו</span>
+                  style="width:70px; font-size:11.5px; padding:5px 7px; border-radius:7px;
+                         border:1px solid #d5dbe3; background:#fff; color:#1e293b;">
                 <span style="flex:1"></span>
                 <button id="omni-mcp-schedule-add" class="omni-mcp-action-btn"
                   style="font-size:11.5px; padding:5px 12px;">תזמן</button>
@@ -1001,7 +1001,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     list.innerHTML = '';
     if (!items.length) {
       const empty = document.createElement('div');
-      empty.style.cssText = 'font-size:11px; color:#64748b;';
+      empty.style.cssText = 'font-size:11px; color:#6b7280;';
       empty.textContent = 'אין תזמונים ממתינים.';
       list.appendChild(empty);
       return;
@@ -1009,7 +1009,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     for (const it of items) {
       const row = document.createElement('div');
-      row.style.cssText = 'display:flex; gap:6px; align-items:center; font-size:11px; color:#cbd5e1;';
+      row.style.cssText = 'display:flex; gap:6px; align-items:center; font-size:11px; color:#334155;';
       let when = '';
       try { when = new Date(it.runAt).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' }); } catch (e) {}
       const label = document.createElement('span');
@@ -1018,7 +1018,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       label.title = it.text;
       const del = document.createElement('span');
       del.textContent = '✕';
-      del.style.cssText = 'cursor:pointer; color:#94a3b8;';
+      del.style.cssText = 'cursor:pointer; color:#94a3b8; font-weight:700;';
       del.title = 'ביטול';
       del.addEventListener('click', async () => {
         try {
