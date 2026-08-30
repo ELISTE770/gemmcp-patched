@@ -28,7 +28,14 @@ if %errorlevel% neq 0 (
 )
 
 cd /d "!TARGET_DIR!\bridge-server"
-if not exist node_modules (
+
+REM `npm ls` reports what is missing, not merely whether node_modules exists.
+REM The old "if not exist node_modules" check skipped the install for anyone
+REM updating an existing copy: the folder was present but the new dependencies
+REM were not, and the server died with "Cannot find module" on startup - here,
+REM where it starts hidden, with nobody to read the error.
+call npm ls --depth=0 --silent >nul 2>&1
+if %errorlevel% neq 0 (
     call npm install
 )
 
