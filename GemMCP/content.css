@@ -197,6 +197,23 @@
   flex-direction: column;
   gap: 12px;
   overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* היומן היה נעול על 160px - כחמש שורות מתוך עשרות. עכשיו הוא לוקח את מה
+   שהפאנל מאפשר, עם רצפה שלא נמעכת וגלילה משלו בעיצוב של הבודי. */
+#omni-mcp-logs {
+  min-height: 120px;
+  max-height: 45vh;
+  overflow-y: auto;
+}
+
+#omni-mcp-logs::-webkit-scrollbar { width: 8px; }
+#omni-mcp-logs::-webkit-scrollbar-track { background: transparent; }
+#omni-mcp-logs::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 8px;
 }
 
 .omni-mcp-body::-webkit-scrollbar { width: 8px; }
@@ -405,9 +422,9 @@
   border-radius: 8px;
   border: 1px solid var(--omni-border);
   border-right: 3px solid var(--omni-accent);
-  direction: ltr;
-  text-align: left;
-  word-break: break-all;
+  unicode-bidi: plaintext;
+  text-align: start;
+  overflow-wrap: anywhere;
   font-weight: 500;
 }
 

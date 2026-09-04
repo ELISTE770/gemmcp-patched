@@ -438,12 +438,31 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 // ה-service worker הוא נקודת הסנכרון היחידה שכל הלשוניות רואות. chrome.storage
 // .session נשמר גם אם ה-worker נרדם, ומתאפס בסגירת הדפדפן - בדיוק תוחלת החיים
 // הנכונה לרשימה כזו.
-const CLAIM_TTL_MS = 6 * 60 * 60 * 1000;
+// התפיסה נועדה למנוע משתי לשוניות לבצע את אותה פקודה באותו רגע, וחלון
+// המרוץ הזה הוא שניות. שש שעות הפכו אותה בפועל לחסימה של בקשה חוזרת:
+// אותה פקודה באותה שיחה לא רצה שוב עד סוף היום, בלי שום הודעה. המפתח
+// משוחרר במפורש בסיום, וה-TTL נשאר רק כרשת ביטחון למקרה שהשחרור אבד.
+const CLAIM_TTL_MS = 10 * 60 * 1000;
 const CLAIM_MAX = 500;
 
 // שתי בקשות מקבילות היו שתיהן קוראות לפני שאחת מהן כותבת, ואז שתיהן היו
 // "ראשונות". שרשור ההבטחות הופך את התפיסה לאטומית.
 let claimChain = Promise.resolve();
+
+// משוחרר דרך אותה שרשרת הבטחות שהתפיסה משתמשת בה, כדי ששחרור וקריאה
+// מקבילה לא ידרסו זה את זה.
+function releaseToolCall(key) {
+  const run = async () => {
+    if (!key) return;
+    const store = await chrome.storage.session.get(['claimedCalls']);
+    const claimed = store.claimedCalls || {};
+    if (!Object.prototype.hasOwnProperty.call(claimed, key)) return;
+    delete claimed[key];
+    await chrome.storage.session.set({ claimedCalls: claimed });
+  };
+  claimChain = claimChain.then(run, run);
+  return claimChain;
+}
 
 function claimToolCall(key) {
   const run = async () => {
@@ -477,6 +496,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     claimToolCall(String(request.key || ''))
       .then((ok) => sendResponse({ claimed: ok }))
       .catch(() => sendResponse({ claimed: true }));   // בכשל, לא חוסמים ביצוע לגיטימי
+    return true;
+  }
+
+  // שחרור אחרי שהפקודה הסתיימה - בהצלחה, בשגיאה או בדחייה. בלעדיו המפתח
+  // נשאר תפוס והבקשה הבאה הזהה לו נבלעת בשקט.
+  if (request.action === 'RELEASE_TOOL_CALL') {
+    releaseToolCall(String(request.key || ''))
+      .then(() => sendResponse({ released: true }))
+      .catch(() => sendResponse({ released: false }));
     return true;
   }
 

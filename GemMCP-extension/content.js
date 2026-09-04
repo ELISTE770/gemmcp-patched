@@ -48,6 +48,25 @@
   let activeServices = ['fetch', 'windows'];
   let connectedServices = ['fetch', 'windows'];
   let processedHashes = new Set();
+
+  // המפתח של הפקודה שנמצאת כרגע בביצוע. גם processedHashes וגם רשימת
+  // התפיסה שב-service worker נועדו למנוע ביצוע כפול של אותה פקודה בו-זמנית,
+  // אבל אף אחד מהם לא שוחרר אי פעם: הראשון החזיק לנצח, והשני שש שעות.
+  // התוצאה היא שבקשה חוזרת של אותה פקודה באותה שיחה - בקשה לגיטימית
+  // לגמרי - נחסמה בשקט מוחלט, בלי שורת יומן ובלי שום סימן על המסך.
+  let inFlightCallKey = null;
+
+  function releaseCallKey() {
+    const key = inFlightCallKey;
+    inFlightCallKey = null;
+    if (!key) return;
+    processedHashes.delete(key);
+    try {
+      chrome.runtime.sendMessage({ action: 'RELEASE_TOOL_CALL', key }, () => {
+        void chrome.runtime.lastError;   // שחרור שנכשל אינו שובר כלום
+      });
+    } catch (e) { /* ההקשר של התוסף נעלם - אין מה לשחרר */ }
+  }
   let isExecuting = false;
   let logsContainer = null;
   let unreadErrors = 0;
@@ -197,6 +216,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         : chatEditor;
       setComposerText(target, String(request.text || ''));
       target.focus();
+      // הזרקה מתפריט ההקשר או מתזמון היא בקשה מפורשת של המשתמש בשיחה הזו.
+      // בלי לסמן אותה כמופעלת, התוסף היה מכניס את ההנחיה ואז מתעלם מהתשובה.
+      markChatActivated();
       showToast('התוכן הוכנס בהצלחה לשיחה', 'success');
       sendResponse({success: true});
     } else {
@@ -292,11 +314,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             </summary>
             <div style="display:flex; flex-direction:column; gap:6px; margin-top:6px;">
               <textarea id="omni-mcp-schedule-text" rows="2" placeholder="מה לשלוח לג'מיני"
-                style="width:100%; box-sizing:border-box; resize:vertical; font-size:11.5px; padding:6px;
                 style="width:100%; box-sizing:border-box; resize:vertical; font-size:11.5px; padding:7px;
                        border-radius:7px; border:1px solid #d5dbe3; background:#fff; color:#1e293b; font-family:inherit;"></textarea>
+                <div style="display:flex; align-items:center; gap:6px;">
                 <input id="omni-mcp-schedule-min" type="number" min="1" max="43200" value="30"
-                  style="width:74px; font-size:11.5px; padding:5px; border-radius:6px;
                   style="width:70px; font-size:11.5px; padding:5px 7px; border-radius:7px;
                          border:1px solid #d5dbe3; background:#fff; color:#1e293b;">
                 <span style="flex:1"></span>
@@ -343,6 +364,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const dragHeader = document.getElementById('omni-mcp-drag-header');
     logsContainer = document.getElementById('omni-mcp-logs');
     loadActivatedChats();
+    watchChatChanges();
     restorePersistedLog();
     wireLogControls();
     wireScheduleControls();
@@ -562,8 +584,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const panelHeight = panel.offsetHeight || 420;
       const panelWidth = panel.offsetWidth || 360;
 
-      panel.classList.toggle('flip-down', top < panelHeight + MARGIN);
+      const flipDown = top < panelHeight + MARGIN;
+      panel.classList.toggle('flip-down', flipDown);
       panel.classList.toggle('flip-left', left + btnRect.width < panelWidth + MARGIN);
+
+      // הגובה היה calc(100vh - 120px) קבוע, בלי קשר לאיפה הכפתור עומד.
+      // כשגוררים את הווידג'ט למעלה הפאנל נפתח כלפי מטה וגולש מתחת לקצה
+      // המסך, ואין גלילת עמוד שמגיעה לשם כי הוא absolute בתוך fixed.
+      const room = flipDown
+        ? window.innerHeight - btnRect.bottom - MARGIN * 2
+        : btnRect.top - MARGIN * 2;
+      panel.style.maxHeight = Math.max(240, Math.round(room)) + 'px';
     }
 
     // מאפשר לחשב מחדש את כיוון הפתיחה ברגע שהפאנל נפתח (אז יש לו מידות אמיתיות)
@@ -785,6 +816,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       if (details) details.open = true;
       // פותח גם את החלונית עצמה כדי שהשגיאה לא תתפספס כשהיא מכווצת
       openPanel();
+      // ...ואז גולל אליה בפועל. בלי זה הפאנל נפתח על תוכן אחר והשגיאה
+      // נשארת מתחת לקפל, וזה בדיוק מה שנראה כמו "היומן נבלע בתחתית".
+      if (details) {
+        try { details.scrollIntoView({ block: 'nearest' }); } catch (e) {}
+      }
     }
   }
 
@@ -817,7 +853,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // משנים display ולא את התכונה hidden: כלל display בסגנון מוטבע גובר על
     // [hidden] של הדפדפן, ואז האזהרה נראתה גם כשההרצה האוטומטית כבויה.
     if (el) {
-      el.style.display = isAutoExecute ? 'flex' : 'none';
+      // גם המצב האוטונומי מריץ בלי לשאול, ולכן הוא חייב להציג את האזהרה
+      // בעצמו - ולא רק כשתיבת הסימון של הווידג'ט דלוקה.
+      el.style.display = (isAutoExecute || autoRunScope === 'all') ? 'flex' : 'none';
       const txt = el.querySelector('span:last-child');
       // הטקסט חייב לתאר את המצב שנבחר בפועל, אחרת האזהרה מבטיחה הגנה שאינה קיימת.
       if (txt) {
@@ -1619,7 +1657,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           }
 
           const callKey = buildCallKey(toolCall);
-          if (!forceRescan && processedHashes.has(callKey)) continue;
+          if (!forceRescan && processedHashes.has(callKey)) {
+            // דילוג שקט כאן הוא בדיוק מה שנראה כמו "הוא לא זיהה את הפקודה".
+            console.log('[GemMCP] פקודה זהה שכבר בביצוע - מדלגים', callKey);
+            continue;
+          }
           processedHashes.add(callKey);
 
           console.log('%c[GemMCP] 🎯 זוהתה פקודת MCP שלמה ותקינה:', 'color: #f59e0b; font-weight: bold;', toolCall);
@@ -1645,15 +1687,41 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   let activatedChats = new Set();
 
   function chatId() {
-    return location.pathname;   // /app/<id>, או /app לשיחה חדשה
+    // '/app' בלי מזהה הוא כל שיחה חדשה שעוד לא נשמרה - כולן נראות זהות.
+    // שמירת המחרוזת הזו ברשימת "הופעל" סימנה בפועל כל שיחה חדשה עתידית
+    // כמופעלת, וזו הסיבה שהתוסף התעורר בשיחות שלא ביקשו ממנו כלום.
+    // הכיוון ההפוך היה שבור באותה מידה: ברגע שג'מיני משכתב את הכתובת
+    // ל-/app/<id> באותה טעינה, השיחה שכן הופעלה איבדה את ההפעלה בשקט.
+    const parts = location.pathname.split('/').filter(Boolean);
+    return (parts[0] === 'app' && parts[1]) ? parts[1] : null;
   }
 
+  // הפעלה שנעשתה בשיחה חדשה שאין לה עדיין מזהה. היא מוחזקת בזיכרון בלבד עד
+  // שג'מיני מקצה כתובת, ורק אז נשמרת - כך שהיא נצמדת לשיחה אחת, לא לכולן.
+  //
+  // התוקף קצוב בכוונה. מבחינת הכתובת בלבד, "שיחה חדשה שקיבלה מזהה" ו"מעבר
+  // לשיחה קיימת" נראים זהים: בשני המקרים /app הופך ל-/app/<id>. ההבדל הוא
+  // בזמן - השכתוב קורה שניות אחרי שההנחיה נשלחת. בלי החלון הזה, הפעלה
+  // שנתקעה הייתה נצמדת לשיחה הבאה שתיפתח, כלומר בדיוק הבאג שתוקן כאן.
+  const PENDING_ACTIVATION_TTL_MS = 2 * 60 * 1000;
+  let pendingActivation = false;
+  let pendingActivationAt = 0;
+
   function isChatActivated() {
-    return activatedChats.has(chatId());
+    const id = chatId();
+    // כל עוד אנחנו באותה שיחה חסרת-מזהה, ההפעלה תקפה בלי הגבלת זמן. חלון
+    // הזמן נוגע רק להצמדה למזהה חדש, אחרת התוסף היה נכבה באמצע שיחה פעילה.
+    return id === null ? pendingActivation : activatedChats.has(id);
   }
 
   async function markChatActivated() {
     const id = chatId();
+    if (id === null) {
+      pendingActivation = true;
+      pendingActivationAt = Date.now();
+      return;
+    }
+    pendingActivation = false;
     activatedChats.add(id);
     try {
       const store = await chrome.storage.local.get([ACTIVATED_KEY]);
@@ -1668,13 +1736,54 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   async function loadActivatedChats() {
     try {
       const store = await chrome.storage.local.get([ACTIVATED_KEY]);
-      if (Array.isArray(store[ACTIVATED_KEY])) activatedChats = new Set(store[ACTIVATED_KEY]);
+      if (!Array.isArray(store[ACTIVATED_KEY])) return;
+      // מיגרציה מהפורמט הקודם, שבו נשמר location.pathname המלא. הערך '/app'
+      // הבודד הוא בדיוק מה שגרם לדליפה ולכן נזרק; '/app/<id>' מומר למזהה.
+      let changed = false;
+      const migrated = [];
+      for (const entry of store[ACTIVATED_KEY]) {
+        if (typeof entry !== 'string') { changed = true; continue; }
+        const seg = entry.split('/').filter(Boolean);
+        const m = (seg[0] === 'app' && seg[1] && seg.length === 2) ? seg[1] : null;
+        if (m) { migrated.push(m); changed = true; }
+        else if (entry.startsWith('/app')) { changed = true; }
+        else migrated.push(entry);
+      }
+      activatedChats = new Set(migrated);
+      if (changed) {
+        try {
+          await chrome.storage.local.set({ [ACTIVATED_KEY]: migrated.slice(-200) });
+        } catch (e) { /* המיגרציה בזיכרון תקפה גם בלי הכתיבה */ }
+      }
     } catch (e) { /* נשארים עם מה שיש בזיכרון */ }
+  }
+
+  // ג'מיני הוא SPA: מעבר בין שיחות, ושכתוב '/app' ל-'/app/<id>' אחרי ההודעה
+  // הראשונה, קורים בלי טעינה מחדש ובלי שאיש מודיע על כך. אין כאן טעם לעטוף
+  // את history.pushState - התוסף רץ בעולם מבודד, והעטיפה שלו לא תראה קריאות
+  // של הדף עצמו. popstate כן מגיע, והשאר נסגר בבדיקה תקופתית זולה.
+  function watchChatChanges() {
+    let lastPath = location.pathname;
+    const onMaybeChanged = () => {
+      if (location.pathname === lastPath) return;
+      lastPath = location.pathname;
+      if (!pendingActivation) return;
+      if (Date.now() - pendingActivationAt > PENDING_ACTIVATION_TTL_MS) {
+        pendingActivation = false;
+        return;
+      }
+      if (chatId() !== null) {
+        markChatActivated();
+        addLog('ההפעלה נצמדה לשיחה הזו');
+      }
+    };
+    window.addEventListener('popstate', onMaybeChanged);
+    setInterval(onMaybeChanged, 1000);
   }
 
   // מזהה השיחה נכנס למפתח, אחרת אותה פקודה בשתי שיחות שונות הייתה נחסמת.
   function buildCallKey(toolCall) {
-    return `${location.pathname}|${toolCall.service}_${toolCall.action}_${JSON.stringify(toolCall)}`;
+    return `${chatId() || 'new'}|${toolCall.service}_${toolCall.action}_${JSON.stringify(toolCall)}`;
   }
 
   // תפיסה חוצת-לשוניות לפני ביצוע.
@@ -1696,6 +1805,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         // ה-worker לא ענה. עדיף לבצע מאשר להיתקע בלי שהמשתמש מבין למה.
       }
     }
+    inFlightCallKey = callKey;
     handleDetectedToolCall(toolCall);
   }
 
@@ -1708,25 +1818,39 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     for (let i = 0; i < str.length; i++) {
       const char = str[i];
 
-      if (char === '"' && !isEscaped) {
-        inString = !inString;
-      }
-      isEscaped = (char === '\\' && !isEscaped);
-
-      if (!inString) {
+      // מחוץ לאובייקט אין מחרוזות שצריך לעקוב אחריהן. קודם מצב המחרוזת נספר
+      // על פני כל הטקסט, ולכן מספר אי-זוגי של גרשיים בפרוזה שלפני הבלוק -
+      // דבר שג'מיני כותב דרך קבע - נעל את הפרסר על inString=true, וכל
+      // הסוגריים שאחריו התעלמו. משם הפקודה פשוט לא נמצאה, בלי שום הודעה.
+      if (openBraces === 0) {
         if (char === '{') {
-          if (openBraces === 0) startIndex = i;
-          openBraces++;
-        } else if (char === '}') {
-          openBraces--;
-          if (openBraces === 0 && startIndex !== -1) {
-            const candidate = str.substring(startIndex, i + 1);
-            try {
-              return JSON.parse(candidate);
-            } catch (e) {
-              // Continue searching if this wasn't valid JSON
-              startIndex = -1;
-            }
+          startIndex = i;
+          openBraces = 1;
+          inString = false;
+          isEscaped = false;
+        }
+        // '}' תועה לפני תחילת האובייקט מדולג. קודם הוא הוריד את המונה אל
+        // מתחת לאפס, ואז התנאי openBraces === 0 לא יכול היה להתקיים שוב.
+        continue;
+      }
+
+      if (char === '"' && !isEscaped) inString = !inString;
+      isEscaped = (char === '\\' && !isEscaped);
+      if (inString) continue;
+
+      if (char === '{') {
+        openBraces++;
+      } else if (char === '}') {
+        openBraces--;
+        if (openBraces === 0 && startIndex !== -1) {
+          const candidate = str.substring(startIndex, i + 1);
+          try {
+            return JSON.parse(candidate);
+          } catch (e) {
+            // ממשיכים לחפש את המועמד הבא, עם מצב נקי לגמרי
+            startIndex = -1;
+            inString = false;
+            isEscaped = false;
           }
         }
       }
@@ -1839,7 +1963,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     const autoToggle = document.getElementById('omni-mcp-auto-toggle');
-    const autoRun = autoToggle ? autoToggle.checked : isAutoExecute;
+    // "אוטונומי" הוא כשלעצמו ההצהרה שהכל רץ לבד, ולכן הוא מדליק את ההרצה
+    // האוטומטית בעצמו. קודם אלה היו שני מתגים נפרדים שנדרשו יחד, ואת השני
+    // - תיבת הסימון שבווידג'ט - הפופאפ בכלל לא יכול היה להדליק. התוצאה:
+    // מי שבחר "אוטונומי" מהפופאפ קיבל בקשת אישור על כל פעולה, כולל קריאה.
+    const autoRun = autoRunScope === 'all' ||
+      (autoToggle ? autoToggle.checked : isAutoExecute);
     addLog(`זוהתה בקשה מ-Gemini עבור [${service}]: ${toolCall.action || toolCall.tool_name || 'execute'}`);
 
     // פעולות בלתי הפיכות או בעלות טווח בלתי מוגבל דורשות אישור *תמיד*, גם כאשר
@@ -1906,15 +2035,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // אחד היה מסתתר בתוך רשימה שנראית תמימה.
     if (Array.isArray(toolCall.plan) && toolCall.plan.length) {
       let worst = { level: 'safe', label: '', icon: '' };
+      // alwaysAsk של שלב בודד חייב לשרוד את הסיכום. בלי זה תוכנית שמכילה
+      // install_from_url בנתה אובייקט סיכון חדש בלי הדגל, עברה את השער
+      // ב-requiresExplicitApproval, והתקינה קובץ מהאינטרנט בלי לשאול -
+      // כלומר עטיפה בתוכנית עקפה את האישור שהפעולה הזו דורשת תמיד.
+      let alwaysAsk = false;
       for (const step of toolCall.plan) {
         const r = ACTION_RISK[String(step.action || '').replace(/^[a-z]+:/, '')] ||
                   { level: 'warn', label: step.action || 'פעולה', icon: '❓' };
+        if (r.alwaysAsk) alwaysAsk = true;
         if (PLAN_RISK_ORDER[r.level] > PLAN_RISK_ORDER[worst.level]) worst = r;
       }
       return {
         level: worst.level,
         label: `תוכנית בת ${toolCall.plan.length} שלבים`,
-        icon: worst.level === 'danger' ? '⚡' : (worst.level === 'warn' ? '📋' : '📋')
+        icon: worst.level === 'danger' ? '⚡' : (worst.level === 'warn' ? '📋' : '📋'),
+        alwaysAsk
       };
     }
     const action = String(toolCall.action || toolCall.tool_name || '').replace(/^[a-z]+:/, '');
@@ -2112,6 +2248,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     function reject(reason) {
       if (settled) return;
       cleanup();
+      // דחייה אינה ביצוע, ולכן היא חייבת לשחרר את המפתח: אחרת בקשה חוזרת
+      // של אותה פעולה - אחרי שדחית אותה בטעות - לא הייתה נקלטת שוב.
+      releaseCallKey();
       sendResponseToGemini(service, { error: reason || 'הפעולה בוטלה על ידי המשתמש.' });
       addLog(reason || 'הפעולה בוטלה ע"י המשתמש', { error: false });
     }
@@ -2175,6 +2314,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         });
         isExecuting = false;
         setBadgeBusy(false);
+        releaseCallKey();
       }
     }, 45000);
 
@@ -2185,6 +2325,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       clearTimeout(executionTimeout);
       isExecuting = false;
       setBadgeBusy(false);
+      releaseCallKey();
       return;
     }
 
@@ -2195,6 +2336,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           clearTimeout(executionTimeout);
           isExecuting = false;
           setBadgeBusy(false);
+          releaseCallKey();
           return;
         }
 
@@ -2207,6 +2349,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           },
           (response) => {
             clearTimeout(executionTimeout);
+            releaseCallKey();
             const lastErr = chrome.runtime.lastError;
             if (lastErr) {
               const errMsg = lastErr.message || 'שגיאת תקשורת עם התוסף';
