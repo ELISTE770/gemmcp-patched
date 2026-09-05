@@ -88,6 +88,33 @@
     </div>
   </div>
 
+
+  <!-- הגדרות הגשר: מה שהיה נעול בקובץ .env ודרש עורך טקסט והפעלה מחדש.
+       מודל התקרה לא השתנה - בקשה בודדת עדיין יכולה רק לצמצם הרשאות, לעולם
+       לא להרחיב. מה שהשתנה הוא מי עורך את התקרה. -->
+  <div class="service-card" id="bridge-settings-card">
+    <div class="service-header">
+      <div class="service-meta">
+        <div>
+          <div class="service-title-row">
+            <span class="service-name" data-i18n="bridgeSettingsTitle">הגדרות הגשר</span>
+            <svg class="expand-chevron" viewBox="0 0 20 20" fill="currentColor">
+              <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"/>
+            </svg>
+          </div>
+          <div class="service-desc" data-i18n="bridgeSettingsDesc">הרשאות, תחומים ומגבלות - נשמר בשרת</div>
+        </div>
+      </div>
+    </div>
+    <div class="service-body">
+      <div id="bridge-settings-body" style="display:flex; flex-direction:column; gap:10px;"></div>
+      <div style="display:flex; align-items:center; gap:8px; margin-top:10px;">
+        <button id="bridge-settings-save" class="btn-save" style="flex:0 0 auto;"
+                data-i18n="bridgeSettingsSave">שמור בשרת</button>
+        <span id="bridge-settings-status" style="font-size:11px; color:#64748b;"></span>
+      </div>
+    </div>
+  </div>
   <!-- רשימת שירותים מתרחבת עם התחברות בקליק + ידנית -->
   <div class="services-list">
     

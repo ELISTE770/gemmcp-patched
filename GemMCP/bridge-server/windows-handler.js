@@ -7,6 +7,14 @@ const { readSmart } = require('./read-smart');
 const { createJob: createInstallJob, cancelJob: cancelInstallJob } = require('./install-jobs');
 const { resolveAppCandidates } = require('./resolve-app');
 
+// נקרא בכל קריאה ולא פעם אחת בעליית התהליך, כדי ששינוי במסך ההגדרות
+// יחול על הפקודה הבאה ולא ידרוש הפעלה מחדש של הגשר.
+function commandTimeoutMs() {
+  const n = Number(process.env.WIN_COMMAND_TIMEOUT_MS);
+  if (!Number.isFinite(n) || n < 1000 || n > 600000) return 30000;
+  return n;
+}
+
 // בדיקה קצרה בתהליך נפרד: איזה תהליך מחזיק כרגע את החלון שבחזית, ומי ההורה
 // שלו. מריצים אותה רק אחרי שסקריפט המיקוד הסתיים, כי כל עוד הוא חי המצב
 // שהוא רואה אינו המצב שנשאר על המסך.
@@ -662,7 +670,7 @@ Write-Output "GEMMCP_TARGET_PIDS $($kin -join ',') $($proc.ProcessName)"
         // כל פקודה, כך שכל מי שיכול לכתוב לקובץ הפרופיל מריץ קוד בכל קריאה.
         execFile('powershell.exe',
           ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', params.command],
-          { cwd, timeout: 30000, maxBuffer: 1024 * 1024 * 5 }, (error, stdout, stderr) => {
+          { cwd, timeout: commandTimeoutMs(), maxBuffer: 1024 * 1024 * 5 }, (error, stdout, stderr) => {
           if (error) {
             return res.json({
               success: false,

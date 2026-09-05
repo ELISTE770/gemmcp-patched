@@ -40,6 +40,9 @@ const I18N_DICT = {
     winPermWriteSub: 'מאפשר לג\'מיני ליצור קבצים חדשים או לשנות קבצים קיימים',
     winPermCmdTitle: '⚡ הרצת פקודות PowerShell / CMD',
     winPermCmdSub: 'הרצת סקריפטים, התקנת חבילות ופקודות טרמינל. שים לב: זו ההרשאה היחידה שאינה כלואה בתיקייה המורשית - פקודה יכולה לגעת בכל מקום במחשב.',
+    bridgeSettingsTitle: 'הגדרות הגשר',
+    bridgeSettingsDesc: 'הרשאות, תחומים ומגבלות - נשמר בשרת',
+    bridgeSettingsSave: 'שמור בשרת',
     builtByPrefix: 'נבנה על ידי',
 
     builtByName: 'בינארי חכם',
@@ -218,6 +221,9 @@ const I18N_DICT = {
     winPermWriteSub: 'Allows Gemini to create new files or modify existing files',
     winPermCmdTitle: '⚡ Run PowerShell / CMD Commands',
     winPermCmdSub: 'Execute terminal scripts, install packages and run CLI commands. Note: this is the one permission the allowed-folder limit cannot contain - a command can reach anywhere on the machine.',
+    bridgeSettingsTitle: 'Bridge settings',
+    bridgeSettingsDesc: 'Permissions, scope and limits - stored on the server',
+    bridgeSettingsSave: 'Save to server',
     builtByPrefix: 'Built by',
 
     builtByName: 'Smart Binary',

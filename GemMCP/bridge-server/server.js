@@ -11,6 +11,7 @@ const { cancelJob: cancelInstallJob, listJobs: listInstallJobs } = require('./in
 const { runPlan, MAX_STEPS } = require('./plan-runner');
 const localDb = require('./local-db');
 const indexers = require('./indexers');
+const settings = require('./settings');
 const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
@@ -656,26 +657,33 @@ function canonicalise(p) {
 //
 // כאן ה-.env הוא תקרה. הלקוח יכול רק לצמצם, לעולם לא להרחיב.
 // ---------------------------------------------------------------------------
-const SERVER_CEILING = {
-  readFiles: process.env.WIN_PERM_READ !== 'false',
-  writeFiles: process.env.WIN_PERM_WRITE === 'true',
-  runCommands: process.env.WIN_PERM_COMMANDS === 'true',
-  launchApps: process.env.WIN_PERM_APPS !== 'false',
-  clipboard: process.env.WIN_PERM_CLIPBOARD !== 'false',
-  // הורדה והרצה של קובץ מהרשת.
-  //
-  // התקרה כאן פתוחה, והבקרה בפועל היא תיבת הסימון בפופאפ - כבויה כברירת
-  // מחדל. הסיבה שזה שונה משאר ההרשאות: תקרה סגורה כאן מחייבת עריכת קובץ
-  // כדי להדליק, וזה לא מה שנדרש מהמשתמש עבור פעולה שממילא עוצרת לאישור
-  // בכל פעם וניתנת לביטול.
-  //
-  // מי שרוצה להשבית לגמרי, בלי תלות בתוסף: WIN_PERM_INSTALL=false ב-.env.
-  allowInstall: process.env.WIN_PERM_INSTALL !== 'false'
-};
+// התקרה נבנית בפונקציה ולא כערך קפוא, כדי שמסך ההגדרות יוכל לטעון אותה
+// מחדש בלי להפעיל את הגשר מחדש. האובייקט עצמו נשאר אותו אובייקט - יש
+// קוד שמחזיק אליו הפניה - ולכן הוא מתעדכן בשדותיו במקום להיות מוחלף.
+function buildCeiling() {
+  return {
+    readFiles: process.env.WIN_PERM_READ !== 'false',
+    writeFiles: process.env.WIN_PERM_WRITE === 'true',
+    runCommands: process.env.WIN_PERM_COMMANDS === 'true',
+    launchApps: process.env.WIN_PERM_APPS !== 'false',
+    clipboard: process.env.WIN_PERM_CLIPBOARD !== 'false',
+    // הורדה והרצה של קובץ מהרשת.
+    //
+    // התקרה כאן פתוחה, והבקרה בפועל היא תיבת הסימון בפופאפ - כבויה כברירת
+    // מחדל. הסיבה שזה שונה משאר ההרשאות: תקרה סגורה כאן מחייבת עריכת קובץ
+    // כדי להדליק, וזה לא מה שנדרש מהמשתמש עבור פעולה שממילא עוצרת לאישור
+    // בכל פעם וניתנת לביטול.
+    //
+    // מי שרוצה להשבית לגמרי, בלי תלות בתוסף: WIN_PERM_INSTALL=false ב-.env.
+    allowInstall: process.env.WIN_PERM_INSTALL !== 'false'
+  };
+}
+
+const SERVER_CEILING = buildCeiling();
 
 // נתיב ריק פירושו כעת "חסום", לא "כל הדיסק". פתיחת הדיסק כולו דורשת הצהרה
 // מפורשת: WIN_ALLOWED_PATH=* .
-const SERVER_ALLOWED_PATH = (() => {
+function computeAllowedPath() {
   const raw = (process.env.WIN_ALLOWED_PATH || '').trim();
   if (raw === '*') return null;                       // ללא הגבלה, בבחירה מודעת
   if (raw) return path.resolve(expandPath(raw));
@@ -694,7 +702,9 @@ const SERVER_ALLOWED_PATH = (() => {
     } catch (e) { /* לא נגיש - ננסה את הבא */ }
   }
   return path.join(os.homedir(), 'Desktop');
-})();
+}
+
+let SERVER_ALLOWED_PATH = computeAllowedPath();
 
 // השוואת נתיבים חייבת לכבד גבול של מפריד תיקיות. startsWith גולמי הופך תיקייה
 // אחות בעלת אותה תחילית לחלק מהתחום המותר, ומאפשר לה לברוח ממנו.
@@ -709,11 +719,13 @@ function isPathInside(child, parent) {
 // קודם נתיב אחד שלט בשניהם, ולכן כדי לקרוא קובץ מ-Downloads היה צריך לפתוח
 // את Downloads גם למחיקה. זו החלפה גרועה: קריאה היא פעולה הפיכה ומחיקה אינה.
 // ברירת המחדל כאן היא ללא הגבלת קריאה, והצמצום נעשה מההגדרות בתוסף.
-const SERVER_READ_PATH = (() => {
+function computeReadPath() {
   const raw = (process.env.WIN_READ_PATH || '*').trim();
   if (raw === '*') return null;                       // ללא הגבלה
   return path.resolve(expandPath(raw));
-})();
+}
+
+let SERVER_READ_PATH = computeReadPath();
 
 // תיקיות מערכת חסומות תמיד, בכל היקף ובכל פעולה. "כל המחשב" פירושו כל מה
 // ששייך למשתמש, לא קבצי מערכת. לקריאה מהן אין שימוש לגיטימי בכלי הזה, והן
@@ -736,7 +748,28 @@ const SYSTEM_PATHS = [
   path.join(os.homedir(), '.ssh')
 ].filter(Boolean).map((p) => path.resolve(p));
 
+// נתיבים שהמשתמש בחר לחסום, מעבר לרשימה הקבועה. הם נוספים ולעולם לא
+// גורעים: אי אפשר להשתמש בהגדרה הזו כדי לפתוח תיקיית מערכת.
+let EXTRA_BLOCKED = [];
+function computeExtraBlocked() {
+  const raw = String(process.env.WIN_EXTRA_BLOCKED_PATHS || '').trim();
+  if (!raw) return [];
+  return raw
+    .split(';')
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .map((p) => {
+      try { return path.resolve(expandPath(p)); } catch (e) { return null; }
+    })
+    .filter(Boolean);
+}
+EXTRA_BLOCKED = computeExtraBlocked();
+
 function isSystemPath(target) {
+  for (const extra of EXTRA_BLOCKED) {
+    const rel = path.relative(extra, target);
+    if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))) return true;
+  }
   return SYSTEM_PATHS.some((sys) => {
     const rel = path.relative(sys, target);
     return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
@@ -800,6 +833,15 @@ function rotateAuditIfNeeded() {
     if (fs.statSync(AUDIT_FILE).size < AUDIT_MAX_BYTES) return;
     fs.renameSync(AUDIT_FILE, AUDIT_FILE + '.1');
   } catch (e) { /* אין קובץ עדיין, או שהסיבוב נכשל - לא מפילים בגלל יומן */ }
+}
+
+// נקרא אחרי שמירה במסך ההגדרות. מה שאי אפשר להחיל חם - הפורט והטוקן,
+// שנקראים פעם אחת בעליית התהליך - מסומן בסכימה כדורש הפעלה מחדש.
+function reloadRuntimeConfig() {
+  Object.assign(SERVER_CEILING, buildCeiling());
+  SERVER_ALLOWED_PATH = computeAllowedPath();
+  SERVER_READ_PATH = computeReadPath();
+  EXTRA_BLOCKED = computeExtraBlocked();
 }
 
 function auditLog(action, params, outcome, detail) {
@@ -968,6 +1010,50 @@ app.post('/api/windows/plan', async (req, res) => {
 // סריקה אחת בכל רגע. שתי סריקות במקביל הן שני תהליכי PowerShell כבדים
 // שמתחרים על אותו דיסק, בלי שנשמר משהו נוסף בסופן.
 let indexingNow = null;
+
+// ---------------------------------------------------------------------------
+// הגדרות הגשר
+//
+// מודל התקרה לא השתנה: בקשה בודדת עדיין יכולה רק לצמצם הרשאות, לעולם
+// לא להרחיב. מה שהשתנה הוא מי עורך את התקרה - הפופאפ במקום עורך טקסט.
+// השינוי נשמר ל-.env, גלוי, ונרשם ביומן הביקורת.
+//
+// תיקיות המערכת אינן הגדרה ואינן מופיעות כאן. הן חסומות בקוד.
+// ---------------------------------------------------------------------------
+app.get('/api/settings', (req, res) => {
+  try {
+    res.json({
+      success: true,
+      data: {
+        settings: settings.currentSettings(),
+        envPath: settings.ENV_PATH
+      }
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+app.post('/api/settings', (req, res) => {
+  const patch = (req.body && req.body.settings) || {};
+  try {
+    const out = settings.applySettings(patch);
+    reloadRuntimeConfig();
+    auditLog('settings_update', { keys: out.written }, 'success',
+             out.restartNeeded.length ? 'restart needed: ' + out.restartNeeded.join(',') : '');
+    res.json({
+      success: true,
+      data: {
+        written: out.written,
+        restartNeeded: out.restartNeeded,
+        settings: settings.currentSettings()
+      }
+    });
+  } catch (e) {
+    auditLog('settings_update', { keys: Object.keys(patch) }, 'denied', e.message);
+    res.status(e.status || 500).json({ success: false, error: e.message });
+  }
+});
 
 app.get('/api/db/collections', (req, res) => {
   try {

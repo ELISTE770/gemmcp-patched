@@ -60,7 +60,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const lblGithub = document.getElementById('lbl-prompt-github');
     if (lblGithub) lblGithub.textContent = (typeof t === 'function' ? t('promptLabelPrefix', lang) : 'הנחיות לכלי ') + (lang === 'he' ? 'GitHub' : 'GitHub');
 
-    renderCustomServers();
+    // הקריאה הזו מגיעה מ-callback של chrome.storage שרץ לפני שהמשתנים
+    // customMcpServersList ו-customServers מוצהרים בהמשך הקובץ, ולכן היא
+    // נכשלה ב-ReferenceError בכל פתיחה של הפופאפ - ובתוך callback, כלומר
+    // בלי ששום דבר על המסך רמז על כך. הרשימה מרונדרת ממילא בהמשך האתחול,
+    // ולכן דילוג כאן אינו מפסיד דבר; מה שכן חשוב הוא שזה לא ייעלם בשקט.
+    try {
+      renderCustomServers();
+    } catch (e) {
+      console.debug('[GemMCP] רינדור מוקדם של שרתים מותאמים דולג:', e.message);
+    }
   }
 
   // Load preferred language or auto-detect
@@ -211,6 +220,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const addCustomServerBtn = document.getElementById('addCustomServerBtn');
   let customServers = [];
 
+  // מוצהר כאן ולא ליד השימוש בו: updatePills קוראת אותו מתוך callback של
+  // chrome.storage שנפתח הרבה לפני ההצהרה המקורית, וזה הפיל אותה ב-TDZ
+  // בכל פתיחה של הפופאפ - בשקט, כי שגיאה בתוך callback לא מגיעה לשום מקום.
+  let popupLaunchFailed = false;
+
   // Windows Permission Checkboxes
   const winPermRead = document.getElementById('win-perm-read');
   const winPermWrite = document.getElementById('win-perm-write');
@@ -230,6 +244,176 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+
+  // -------------------------------------------------------------------------
+  // הגדרות הגשר.
+  //
+  // הפופאפ הוא דף של התוסף ולא דף רגיל, ולכן מדיניות Local Network Access
+  // אינה חוסמת אותו מלפנות ל-localhost - בניגוד ל-content script, שחייב
+  // לעבור דרך ה-service worker.
+  // -------------------------------------------------------------------------
+  const bridgeSettingsBody = document.getElementById('bridge-settings-body');
+  const bridgeSettingsSave = document.getElementById('bridge-settings-save');
+  const bridgeSettingsStatus = document.getElementById('bridge-settings-status');
+  let bridgeSettingsLoaded = false;
+
+  const SETTINGS_GROUPS = {
+    permissions: { he: 'הרשאות', en: 'Permissions' },
+    scope:       { he: 'תחומים', en: 'Scope' },
+    limits:      { he: 'מגבלות', en: 'Limits' },
+    other:       { he: 'אחר', en: 'Other' }
+  };
+
+  function bridgeSettingsSay(text, kind) {
+    if (!bridgeSettingsStatus) return;
+    bridgeSettingsStatus.textContent = text || '';
+    bridgeSettingsStatus.style.color =
+      kind === 'error' ? '#b91c1c' : (kind === 'success' ? '#15803d' : '#64748b');
+  }
+
+  function renderBridgeSettings(list) {
+    if (!bridgeSettingsBody) return;
+    bridgeSettingsBody.textContent = '';
+
+    const order = ['permissions', 'scope', 'limits', 'other'];
+    for (const group of order) {
+      const rows = list.filter((s) => s.group === group);
+      if (!rows.length) continue;
+
+      const head = document.createElement('div');
+      head.style.cssText = 'font-size:11px; font-weight:700; color:#334155; margin-top:4px;';
+      const g = SETTINGS_GROUPS[group] || { he: group, en: group };
+      head.textContent = currentLang === 'he' ? g.he : g.en;
+      bridgeSettingsBody.appendChild(head);
+
+      for (const s of rows) {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex; flex-direction:column; gap:3px; padding:7px 9px;' +
+          'border:1px solid #e2e8f0; border-radius:8px; background:#fbfdff;';
+
+        const top = document.createElement('label');
+        top.style.cssText = 'display:flex; align-items:center; gap:8px; cursor:pointer;';
+
+        let input;
+        if (s.type === 'bool') {
+          input = document.createElement('input');
+          input.type = 'checkbox';
+          input.checked = Boolean(s.value);
+        } else {
+          input = document.createElement('input');
+          input.type = s.type === 'int' ? 'number' : (s.type === 'secret' ? 'password' : 'text');
+          input.value = s.type === 'secret' ? '' : String(s.value == null ? '' : s.value);
+          if (s.type === 'secret') {
+            // הערך עצמו לעולם אינו נשלח לתצוגה. שדה ריק פירושו "אל תיגע",
+            // ולכן הרמז חייב לומר זאת - אחרת כל שמירה נראית כמו מחיקה.
+            input.placeholder = s.isSet ? 'מוגדר - השאר ריק כדי לא לשנות' : 'לא מוגדר';
+          }
+          if (s.min !== undefined) input.min = String(s.min);
+          if (s.max !== undefined) input.max = String(s.max);
+          input.style.cssText = 'width:100%; box-sizing:border-box; font-size:11.5px; padding:5px 7px;' +
+            'border-radius:6px; border:1px solid #d5dbe3; background:#fff; color:#1e293b;';
+        }
+        input.dataset.settingKey = s.key;
+        input.dataset.settingType = s.type;
+
+        const title = document.createElement('span');
+        title.style.cssText = 'font-size:11.5px; font-weight:600; color:#1e293b;' +
+        'unicode-bidi:plaintext; text-align:start;';
+        title.textContent = s.label + (s.restart ? ' (דורש הפעלה מחדש)' : '');
+
+        if (s.type === 'bool') {
+          top.appendChild(input);
+          top.appendChild(title);
+          row.appendChild(top);
+        } else {
+          row.appendChild(title);
+          row.appendChild(input);
+        }
+
+        const desc = document.createElement('div');
+        desc.style.cssText = 'font-size:10.5px; color:#64748b; line-height:1.45;' +
+          'unicode-bidi:plaintext; text-align:start;';
+        desc.textContent = s.description || '';
+        row.appendChild(desc);
+
+        bridgeSettingsBody.appendChild(row);
+      }
+    }
+  }
+
+  async function loadBridgeSettings() {
+    if (!bridgeSettingsBody) return;
+    bridgeSettingsBody.textContent = 'טוען...';
+    try {
+      const res = await fetch('http://127.0.0.1:3000/api/settings', {
+        headers: await buildPopupBridgeHeaders()
+      });
+      const json = await res.json();
+      if (!json || !json.success) throw new Error((json && json.error) || 'שגיאה');
+      renderBridgeSettings(json.data.settings || []);
+      bridgeSettingsLoaded = true;
+      bridgeSettingsSay('');
+    } catch (e) {
+      bridgeSettingsBody.textContent = '';
+      bridgeSettingsSay('שרת הגשר אינו מגיב. הפעל אותו ונסה שוב.', 'error');
+    }
+  }
+
+  async function saveBridgeSettings() {
+    if (!bridgeSettingsBody || !bridgeSettingsLoaded) return;
+    const payload = {};
+    bridgeSettingsBody.querySelectorAll('[data-setting-key]').forEach((el) => {
+      const key = el.dataset.settingKey;
+      const type = el.dataset.settingType;
+      if (type === 'bool') payload[key] = el.checked;
+      else payload[key] = el.value;
+    });
+
+    bridgeSettingsSay('שומר...');
+    try {
+      const res = await fetch('http://127.0.0.1:3000/api/settings', {
+        method: 'POST',
+        headers: await buildPopupBridgeHeaders(),
+        body: JSON.stringify({ settings: payload })
+      });
+      const json = await res.json();
+      if (!json || !json.success) throw new Error((json && json.error) || 'שגיאה');
+      renderBridgeSettings(json.data.settings || []);
+      const restart = json.data.restartNeeded || [];
+      bridgeSettingsSay(
+        restart.length ? 'נשמר. הפעל מחדש את הגשר כדי שיחול' : 'נשמר בשרת ✅',
+        'success'
+      );
+    } catch (e) {
+      bridgeSettingsSay(e.message || 'השמירה נכשלה', 'error');
+    }
+  }
+
+  // הטוקן נשלח כמו בכל פנייה אחרת לגשר. כשאין טוקן מוגדר הכותרת פשוט חסרה.
+  async function buildPopupBridgeHeaders() {
+    const headers = { 'Content-Type': 'application/json' };
+    try {
+      const store = await chrome.storage.sync.get(['bridgeAuthToken']);
+      const token = (store && store.bridgeAuthToken ? String(store.bridgeAuthToken) : '').trim();
+      if (token) headers['x-bridge-token'] = token;
+    } catch (e) { /* בלי טוקן - הגשר יחליט בעצמו אם לדרוש */ }
+    return headers;
+  }
+
+  if (bridgeSettingsSave) bridgeSettingsSave.addEventListener('click', saveBridgeSettings);
+
+  // נטען רק כשפותחים את הכרטיס, ולא בכל פתיחה של הפופאפ.
+  const bridgeSettingsCard = document.getElementById('bridge-settings-card');
+  if (bridgeSettingsCard) {
+    const header = bridgeSettingsCard.querySelector('.service-header');
+    if (header) {
+      header.addEventListener('click', () => {
+        if (bridgeSettingsCard.classList.contains('open') && !bridgeSettingsLoaded) {
+          loadBridgeSettings();
+        }
+      });
+    }
+  }
   document.querySelectorAll('input[name="run-mode"]').forEach((radio) => {
     radio.addEventListener('change', () => {
       if (!radio.checked) return;
@@ -945,7 +1129,6 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // --- בדיקת סטטוס חי עבור Windows Bridge + Node.js ---
-  let popupLaunchFailed = false;
 
   function checkWindowsBridgeStatus(callback) {
     chrome.runtime.sendMessage({ action: 'TEST_SERVICE_CONNECTION', service: 'windows' }, (res) => {

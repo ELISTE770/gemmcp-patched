@@ -13,7 +13,14 @@ const path = require('path');
 
 // תקרה נפרדת לחילוץ: מסמך של 200MB יתפוס את הגשר, שהוא חד-תהליכי, לזמן
 // ארוך. מוטב לסרב מפורשות מאשר להיתקע.
+// תקרת הקריאה היא הגדרה, ונקראת בכל קריאה כדי ששינוי יחול מיד.
+// 40MB נשארת התקרה הקשיחה לחילוץ מסמכים, גם אם ההגדרה גבוהה ממנה.
 const MAX_EXTRACT_BYTES = 40 * 1024 * 1024;
+function maxReadBytes() {
+  const n = Number(process.env.WIN_MAX_READ_BYTES);
+  if (!Number.isFinite(n) || n < 1024) return 10 * 1024 * 1024;
+  return Math.min(n, MAX_EXTRACT_BYTES);
+}
 
 const TEXT_EXTENSIONS = new Set([
   '.txt', '.md', '.markdown', '.log', '.csv', '.tsv', '.json', '.xml', '.yaml', '.yml',
@@ -71,7 +78,7 @@ async function readSmart(filePath) {
   const stat = fs.statSync(filePath);
 
   if (ext === '.pdf' || ext === '.docx') {
-    if (stat.size > MAX_EXTRACT_BYTES) {
+    if (stat.size > maxReadBytes()) {
       return {
         kind: 'binary', text: '', meta: { bytes: stat.size },
         note: `הקובץ גדול מדי לחילוץ טקסט (${Math.round(stat.size / 1048576)}MB).`
@@ -94,6 +101,18 @@ async function readSmart(filePath) {
         note: `חילוץ הטקסט נכשל: ${e.message}`
       };
     }
+  }
+
+  // קריאה ללא תקרה: כל קובץ נקרא במלואו לזיכרון. קובץ וידאו או גיבוי
+  // של כמה ג'יגה היה מפיל את הגשר, ובלי שום הודעה מובנת. התקרה היא
+  // ההגדרה "גודל קריאה מרבי", ברירת מחדל 10MB.
+  const cap = maxReadBytes();
+  if (stat.size > cap) {
+    return {
+      kind: 'too-large', text: '', meta: { bytes: stat.size, cap },
+      note: `הקובץ גדול מהתקרה לקריאה: ${Math.round(stat.size / 1048576)}MB ` +
+            `מול ${Math.round(cap / 1048576)}MB. אפשר להעלות את "גודל קריאה מרבי" בהגדרות.`
+    };
   }
 
   const buf = fs.readFileSync(filePath);
