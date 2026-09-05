@@ -9,6 +9,8 @@ const { createFileActions } = require('./actions-files');
 const { handleWindowsExecute } = require('./windows-handler');
 const { cancelJob: cancelInstallJob, listJobs: listInstallJobs } = require('./install-jobs');
 const { runPlan, MAX_STEPS } = require('./plan-runner');
+const localDb = require('./local-db');
+const indexers = require('./indexers');
 const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
@@ -952,6 +954,80 @@ app.post('/api/windows/plan', async (req, res) => {
 });
 
 // בדיקת תקינות שרת
+// ---------------------------------------------------------------------------
+// מסד הנתונים המקומי
+//
+// סריקה חיה של המחשב עולה שניות ארוכות, ובמקרה של תפריט התחל היא גם
+// כבדה. במקום לשלם את זה בכל בקשה, המשתמש מריץ איסוף פעם אחת מהפאנל
+// והתוצאה נשמרת. משם כל שאלה נענית מקובץ, וגם בלי חיבור לשום מקום.
+//
+// כל הנתיבים כאן עוברים דרך אותה שכבת CORS, Origin ואימות שחלה על יתר
+// ה-API, כי היא רשומה כ-middleware גלובלי למעלה.
+// ---------------------------------------------------------------------------
+
+// סריקה אחת בכל רגע. שתי סריקות במקביל הן שני תהליכי PowerShell כבדים
+// שמתחרים על אותו דיסק, בלי שנשמר משהו נוסף בסופן.
+let indexingNow = null;
+
+app.get('/api/db/collections', (req, res) => {
+  try {
+    res.json({
+      success: true,
+      data: {
+        collections: localDb.listCollections(),
+        jobs: indexers.listJobs(),
+        running: indexingNow
+      }
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+app.post('/api/db/index', async (req, res) => {
+  const job = String((req.body && req.body.job) || '');
+  if (indexingNow) {
+    return res.status(409).json({
+      success: false,
+      error: `כבר רצה משימת איסוף ('${indexingNow}'). המתן לסיומה.`
+    });
+  }
+  indexingNow = job;
+  try {
+    const result = await indexers.runJob(job);
+    const saved = localDb.writeCollection(job, result.items, result.meta);
+    res.json({ success: true, data: saved });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, error: e.message });
+  } finally {
+    indexingNow = null;
+  }
+});
+
+app.post('/api/db/query', (req, res) => {
+  const b = req.body || {};
+  try {
+    const out = localDb.queryCollection(String(b.collection || ''), {
+      q: b.q,
+      limit: b.limit,
+      fields: b.fields
+    });
+    res.json({ success: true, data: out });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, error: e.message });
+  }
+});
+
+app.post('/api/db/clear', (req, res) => {
+  try {
+    const name = String((req.body && req.body.collection) || '');
+    const removed = localDb.deleteCollection(name);
+    res.json({ success: true, data: { removed } });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, error: e.message });
+  }
+});
+
 app.get('/api/health', (req, res) => {
   // נתיב פתוח בכוונה, ולכן אינו חושף את הטוקן עצמו - רק את מה שהתוסף צריך
   // כדי להציג מצב נכון ולהנחות את המשתמש.

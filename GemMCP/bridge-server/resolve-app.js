@@ -20,6 +20,7 @@
  */
 
 const { execFile } = require('child_process');
+const localDb = require('./local-db');
 
 const RESOLVE_TIMEOUT_MS = 12000;
 const MAX_CANDIDATES = 12;
@@ -92,10 +93,40 @@ const RESOLVER = [
  * @param {string} name שם התוכנה כפי שהמשתמש כתב אותו
  * @returns {Promise<Array<{type: string, label: string, target: string}>>}
  */
+/**
+ * אותה שאלה, מתוך האוסף שנאסף מראש. מחזיר null כשאין אוסף בכלל, כדי
+ * להבדיל בין "לא נסרק מעולם" לבין "נסרק ולא נמצא".
+ */
+function fromIndex(target) {
+  let col;
+  try { col = localDb.readCollection('apps'); } catch (e) { return null; }
+  if (!col || !col.items.length) return null;
+
+  const q = target.toLowerCase();
+  const seen = new Set();
+  const out = [];
+  for (const i of col.items) {
+    const label = String((i && i.label) || '');
+    if (!label.toLowerCase().includes(q)) continue;
+    const t = String((i && i.target) || '');
+    if (!t || seen.has(t.toLowerCase())) continue;
+    seen.add(t.toLowerCase());
+    out.push({ type: String(i.type || 'unknown'), label, target: t });
+    if (out.length >= MAX_CANDIDATES) break;
+  }
+  return out;
+}
+
 function resolveAppCandidates(name) {
   return new Promise((resolve) => {
     const target = String(name || '').trim();
     if (!target) return resolve([]);
+
+    // האוסף המקומי קודם. הסריקה החיה עולה שמונה עד עשר שניות, והתשובה
+    // ממנו זהה. אוסף שקיים אך לא החזיר כלום אינו סוף פסוק - ייתכן שהתוכנה
+    // הותקנה אחרי האיסוף - ולכן במקרה הזה עדיין סורקים בפועל.
+    const indexed = fromIndex(target);
+    if (indexed && indexed.length) return resolve(indexed);
 
     execFile(
       'powershell.exe',

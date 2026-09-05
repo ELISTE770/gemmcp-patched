@@ -1,7 +1,7 @@
 {
   "name": "gemini-mcp-bridge-server",
-  "version": "2.1.2",
-  "description": "שרת גשר מקומי קל לביצוע שאילתות Supabase וחיבור לפרוטוקול MCP עבור Gemini Web",
+  "version": "1.2.4",
+  "description": "שרת הגשר המקומי של GemMCP (SB): הרשאות Windows, מסד מקומי וחיבור MCP עבור Gemini Web",
   "main": "server.js",
   "bin": "server.js",
   "scripts": {
@@ -9,11 +9,12 @@
     "dev": "nodemon server.js",
     "test": "node test/bridge.test.js",
     "test:sql": "node ../test/sql-gate.test.js",
-    "test:all": "node test/bridge.test.js && node test/capabilities.test.js && node ../test/sql-gate.test.js && node ../test/plan-card.test.js && node ../test/prompt-coverage.test.js && node ../test/i18n-coverage.test.js",
+    "test:all": "node test/bridge.test.js && node test/capabilities.test.js && node ../test/sql-gate.test.js && node ../test/plan-card.test.js && node ../test/prompt-coverage.test.js && node ../test/i18n-coverage.test.js && node ../test/json-extract.test.js",
     "test:caps": "node test/capabilities.test.js",
     "test:card": "node ../test/plan-card.test.js",
     "test:prompt": "node ../test/prompt-coverage.test.js",
-    "test:i18n": "node ../test/i18n-coverage.test.js"
+    "test:i18n": "node ../test/i18n-coverage.test.js",
+    "test:json": "node ../test/json-extract.test.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",
