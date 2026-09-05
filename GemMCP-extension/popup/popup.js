@@ -246,6 +246,64 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
 
+
+  // -------------------------------------------------------------------------
+  // השהיית התוסף.
+  //
+  // כיבוי השרת לבדו אינו מספיק: הפעולה הבאה מעירה אותו דרך gemmcp:// תוך
+  // שניות. הדגל נשמר, ה-service worker מכבד אותו, ורק אז "כבוי" באמת אומר
+  // כבוי - וזו גם הסיבה שההחזרה דורשת פעולה מפורשת.
+  // -------------------------------------------------------------------------
+  const sleepToggle = document.getElementById('sleep-toggle');
+  const sleepStatus = document.getElementById('sleep-status');
+
+  function saySleep(text, kind) {
+    if (!sleepStatus) return;
+    sleepStatus.textContent = text || '';
+    sleepStatus.style.color = kind === 'error' ? '#b91c1c'
+      : (kind === 'success' ? '#15803d' : '#64748b');
+  }
+
+  if (sleepToggle) {
+    chrome.storage.sync.get(['bridgeAsleep'], (data) => {
+      sleepToggle.checked = Boolean(data && data.bridgeAsleep);
+      if (sleepToggle.checked) saySleep('התוסף מושהה. לא תבוצע שום פעולה במחשב.');
+    });
+
+    sleepToggle.addEventListener('change', async () => {
+      const asleep = sleepToggle.checked;
+      chrome.storage.sync.set({ bridgeAsleep: asleep });
+
+      if (asleep) {
+        saySleep('מכבה את הגשר...');
+        chrome.runtime.sendMessage({ action: 'SHUTDOWN_BRIDGE_SERVER' }, () => {
+          // גם אם הכיבוי נכשל - למשל השרת כבר לא רץ - הדגל כבר נשמר,
+          // והוא זה שמונע את ההתעוררות. לכן אין כאן מצב כישלון אמיתי.
+          void chrome.runtime.lastError;
+          saySleep('התוסף מושהה. הגשר כבוי ולא יעלה מעצמו.', 'success');
+        });
+      } else {
+        saySleep('מעיר את הגשר... זה יכול לקחת עד חצי דקה.');
+        try {
+          const res = await fetch('http://127.0.0.1:3000/api/health');
+          if (res.ok) { saySleep('הגשר פעיל.', 'success'); return; }
+        } catch (e) { /* לא רץ - מעירים אותו */ }
+        const frame = document.createElement('iframe');
+        frame.style.display = 'none';
+        frame.src = 'gemmcp://start';
+        document.body.appendChild(frame);
+        setTimeout(() => frame.remove(), 2000);
+        // ההפעלה נמדדה בשמונה עד שתים עשרה שניות, ולכן הבדיקה כאן סבלנית.
+        let up = false;
+        for (let i = 0; i < 30 && !up; i++) {
+          await new Promise((r) => setTimeout(r, 1000));
+          try { up = (await fetch('http://127.0.0.1:3000/api/health')).ok; } catch (e) { /* עוד לא */ }
+        }
+        saySleep(up ? 'הגשר פעיל.' : 'הגשר לא עלה. הפעל את start-bridge.bat ידנית.',
+                 up ? 'success' : 'error');
+      }
+    });
+  }
   // -------------------------------------------------------------------------
   // מסד הנתונים המקומי.
   //

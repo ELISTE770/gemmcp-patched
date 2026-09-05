@@ -2896,6 +2896,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   // האזנה להודעות מהרקע (למשל הפעלת שרת ה-Bridge בעת שימוש בכלי Windows)
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    // הפעלת הגשר נמדדה בשמונה עד שתים עשרה שניות. בלי שורת היומן הזו זה
+    // נראה כמו תקיעה, וזו הסיבה שנדמה היה שההפעלה האוטומטית לא עובדת.
+    if (message && message.type === 'BRIDGE_STARTING') {
+      addLog('מעיר את שרת הגשר... זה לוקח כעשר שניות');
+      return;
+    }
+
     if (message && message.action === 'TRIGGER_BRIDGE_STARTUP') {
       triggerBridgeStartupProtocol();
       sendResponse({ status: 'triggered' });

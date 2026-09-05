@@ -19,7 +19,7 @@ REM `npm ls` returns non-zero when anything declared in package.json is
 REM missing, which covers a first install, an update, and a broken install.
 echo.
 echo [i] Checking dependencies...
-call npm ls --depth=0 --silent >nul 2>&1
+node check-deps.js
 if %errorlevel% neq 0 goto install_deps
 echo [i] All dependencies present.
 goto run_server

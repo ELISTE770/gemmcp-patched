@@ -795,7 +795,32 @@ async function handleOmniToolExecution(service, toolCall, config) {
  * 🪟 ביצוע פעולות Windows OS מול ה-Bridge Server המקומי
  * כולל מנגנון Auto-Launch ו-Retry שקוף במקרה שהשרת כבוי
  */
+// הודעה קצרה ללשונית הפעילה. נכשלת בשקט כשאין לשונית מתאימה - זו הודעת
+// התקדמות, ואין סיבה שהיא תפיל פעולה.
+function notifyTab(message) {
+  chrome.tabs.query({ active: true, currentWindow: true })
+    .then((tabs) => {
+      if (tabs && tabs[0] && tabs[0].id) {
+        chrome.tabs.sendMessage(tabs[0].id, message).catch(() => {});
+      }
+    })
+    .catch(() => {});
+}
+
 async function executeWindowsMcp(toolCall, config) {
+  // מתג ההשהיה. בלי הבדיקה הזו הוא היה תווית בלבד: הפעולה הבאה מעירה את
+  // הגשר דרך gemmcp:// תוך שניות, ו"כבוי" לא היה אומר כלום.
+  try {
+    const nap = await chrome.storage.sync.get(['bridgeAsleep']);
+    if (nap && nap.bridgeAsleep) {
+      throw new Error(
+        'התוסף מושהה כרגע. כדי להפעיל אותו שוב, כבה את מתג ההשהיה בפופאפ.'
+      );
+    }
+  } catch (e) {
+    // שגיאת אחסון אינה סיבה לחסום; שגיאת ההשהיה עצמה כן ממשיכה החוצה.
+    if (e && typeof e.message === 'string' && e.message.indexOf('מושהה') !== -1) throw e;
+  }
   // תוכנית מרובת שלבים נשלחת ל-endpoint אחר, שמריץ את השלבים ברצף ומעביר
   // ערכים ביניהם בצד השרת - במקום סבב שלם בצ'אט לכל שלב.
   const isPlan = Array.isArray(toolCall.plan) && toolCall.plan.length > 0;
@@ -915,12 +940,26 @@ async function executeWindowsMcp(toolCall, config) {
       chrome.tabs.sendMessage(tabs[0].id, { action: 'TRIGGER_BRIDGE_STARTUP' }).catch(() => {});
     }
 
-    // 3. לולאת המתנה קצרה להתעוררות השרת (עד 6 שניות)
+    // 3. המתנה להתעוררות השרת.
+    //
+    // החלון היה שש שניות, וזה פשוט לא הספיק: מדדתי את השרשרת המלאה -
+    // wscript, cmd, בדיקת תלויות, netstat ועליית node - בין שמונה לשתים
+    // עשרה שניות. כלומר ההפעלה האוטומטית "נכשלה" תמיד, והמשתמש הוסק
+    // שצריך להפעיל את השרת ידנית בעוד הוא עלה מצוין רגע אחרי הוויתור.
+    //
+    // שלושים שניות הן רווח נשימה ולא ציפייה: בהרצה רגילה זה נגמר תוך
+    // שמונה, ורק התקנה ראשונה שמריצה npm install לוקחת יותר.
     const startTime = Date.now();
     let serverReady = false;
+    let announced = false;
 
-    while (Date.now() - startTime < 6000) {
+    while (Date.now() - startTime < 30000) {
       await new Promise(r => setTimeout(r, 600));
+      // אחרי ארבע שניות זה כבר לא נראה כמו רגע - אומרים למשתמש מה קורה.
+      if (!announced && Date.now() - startTime > 4000) {
+        announced = true;
+        notifyTab({ type: 'BRIDGE_STARTING' });
+      }
       try {
         const pingCtrl = new AbortController();
         const pingTId = setTimeout(() => pingCtrl.abort(), 800);
@@ -941,7 +980,11 @@ async function executeWindowsMcp(toolCall, config) {
       return await tryFetchOnce(25000);
     }
 
-    throw new Error('שרת ה-Bridge לא היה פעיל. נשלחה פקודת הפעלה אוטומטית, וודא שאישרת או שהרצת register-protocol.bat.');
+    throw new Error(
+      'שרת ה-Bridge לא עלה תוך 30 שניות. אם זו התקנה חדשה, הרץ פעם אחת את ' +
+      'register-protocol.bat שבתיקיית GemMCP - בלעדיו התוסף אינו יכול להעיר ' +
+      'את השרת בעצמו. אחרת הפעל את start-bridge.bat ידנית.'
+    );
   }
 }
 

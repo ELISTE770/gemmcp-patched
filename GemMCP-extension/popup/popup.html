@@ -90,6 +90,21 @@
 
 
 
+
+  <!-- השהיית התוסף: מכבה את הגשר וגם מונע ממנו לעלות מחדש לבד. בלי החלק
+       השני זה חסר משמעות - הפעולה הבאה הייתה מעירה אותו דרך gemmcp://. -->
+  <div class="service-card" id="sleep-card">
+    <div class="service-body" style="max-height:none; padding:12px 14px;">
+      <label class="perm-checkbox-row" style="margin:0;">
+        <input type="checkbox" id="sleep-toggle">
+        <div class="perm-text">
+          <span class="perm-title" data-i18n="sleepTitle">😴 השהיית התוסף</span>
+          <span class="perm-sub" data-i18n="sleepSub">מכבה את שרת הגשר ומונע ממנו לעלות מחדש מעצמו. כל עוד זה דלוק, התוסף לא יבצע שום פעולה במחשב - להחזרה, כבה את המתג כאן או הפעל את start-bridge.bat ידנית.</span>
+        </div>
+      </label>
+      <div id="sleep-status" style="font-size:11px; color:#64748b; margin-top:6px;"></div>
+    </div>
+  </div>
   <!-- מסד הנתונים המקומי: סריקה אחת של המחשב שנשמרת, במקום סריקה חוזרת
        בכל בקשה. אחרי איסוף אחד, פתיחת תוכנה נענית תוך מילישניות במקום
        שניות - וגם עובדת בלי רשת. -->

@@ -29,12 +29,16 @@ if %errorlevel% neq 0 (
 
 cd /d "!TARGET_DIR!\bridge-server"
 
-REM `npm ls` reports what is missing, not merely whether node_modules exists.
-REM The old "if not exist node_modules" check skipped the install for anyone
-REM updating an existing copy: the folder was present but the new dependencies
-REM were not, and the server died with "Cannot find module" on startup - here,
-REM where it starts hidden, with nobody to read the error.
-call npm ls --depth=0 --silent >nul 2>&1
+REM What must be checked is not "does node_modules exist" - it does, even after
+REM an update that added a dependency, and that is exactly when the server dies
+REM with "Cannot find module" in a hidden window nobody reads.
+REM
+REM This used to call `npm ls`, which answers the same question - but it was
+REM measured at eight seconds, while the extension gives up waiting for the
+REM bridge much sooner. The result was an auto-start that always "failed" and
+REM a user told to start the server by hand. check-deps.js answers it in under
+REM half a second by looking for each declared dependency on disk.
+node check-deps.js >nul 2>&1
 if %errorlevel% neq 0 (
     call npm install
 )
