@@ -5,6 +5,7 @@ const { exec, execFile } = require('child_process');
 const { createFileActions } = require('./actions-files');
 const { readSmart } = require('./read-smart');
 const { createJob: createInstallJob, cancelJob: cancelInstallJob } = require('./install-jobs');
+const { resolveAppCandidates } = require('./resolve-app');
 
 // בדיקה קצרה בתהליך נפרד: איזה תהליך מחזיק כרגע את החלון שבחזית, ומי ההורה
 // שלו. מריצים אותה רק אחרי שסקריפט המיקוד הסתיים, כי כל עוד הוא חי המצב
@@ -786,16 +787,14 @@ Write-Output "GEMMCP_TARGET_PIDS $($kin -join ',') $($proc.ProcessName)"
         // שהוא נוגע ב-cmd. תו כמו & או | היה הופך פתיחת תוכנה להרצת פקודה שרירותית.
         const SAFE_EXE = /^[A-Za-z0-9._-]+$/;
         const SAFE_URI = /^[A-Za-z][A-Za-z0-9.+-]*:[^"'`|&;<>^%\r\n]*$/;
-        if (!SAFE_EXE.test(targetToRun) && !SAFE_URI.test(targetToRun)) {
-          return res.status(400).json({
-            success: false,
-            error: `שם היישום '${appTarget}' מכיל תווים שאינם מורשים.`
-          });
-        }
 
-        const launchTarget = () => {
+        // explicit הוא יעד שכבר אותר במחשב: נתיב מהרישום, קיצור מתפריט התחל
+        // או AppID של אפליקציית Store. הוא אינו עובר את בדיקת התווים כי הוא
+        // לא הגיע מהמודל אלא מ-Windows עצמו, ונתיבים אמיתיים מכילים רווחים.
+        const launchTarget = (explicit) => {
+          const runTarget = explicit || targetToRun;
           // execFile ולא exec - הארגומנטים מועברים כמערך ואינם עוברים פירוש shell
-          execFile('cmd.exe', ['/c', 'start', '', targetToRun],
+          execFile('cmd.exe', ['/c', 'start', '', runTarget],
             { windowsHide: false, timeout: LAUNCH_TIMEOUT_MS, killSignal: 'SIGKILL' }, (cmdErr) => {
             if (!cmdErr) {
               return reportLaunched();
@@ -810,7 +809,7 @@ Write-Output "GEMMCP_TARGET_PIDS $($kin -join ',') $($proc.ProcessName)"
 
             // Fallback ל-PowerShell במידה ו-cmd start נכשל
             execFile('powershell.exe',
-              ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', `Start-Process "${targetToRun}"`],
+              ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', `Start-Process "${runTarget}"`],
               { timeout: LAUNCH_TIMEOUT_MS, killSignal: 'SIGKILL' },
               (psErr) => {
                 if (psErr) {
@@ -821,6 +820,78 @@ Write-Output "GEMMCP_TARGET_PIDS $($kin -join ',') $($proc.ProcessName)"
               });
           });
         };
+
+        const stripExe = (v) => {
+          const t = String(v).toLowerCase();
+          return t.endsWith('.exe') ? t.slice(0, -4) : t;
+        };
+
+        // חיפוש התוכנה במקומות שבהם Windows באמת רושם תוכנות, אחרי ש-PATH
+        // או בדיקת התווים לא הספיקו. השם מועבר לסקריפט דרך משתנה סביבה
+        // ומשמש שם כתבנית -like בלבד, ולכן אינו יכול לגעת ב-shell.
+        const resolveAndLaunch = async (notFoundHint) => {
+          const candidates = await resolveAppCandidates(appTarget);
+          if (!candidates.length) {
+            return res.status(404).json({ success: false, error: notFoundHint });
+          }
+
+          // התאמה מדויקת אחת ויחידה היא החלטה, לא ניחוש, ולכן נפתחת מיד.
+          // יותר מאחת - למשל notepad שמחזיר גם Notepad וגם Notepad++ - היא
+          // בדיוק המקרה שבו בחירה שקטה תפתח את התוכנה הלא נכונה.
+          const wanted = stripExe(appLow);
+          const exact = candidates.filter((c) => stripExe(c.label) === wanted);
+
+          // התאמה מדויקת מופיעה בדרך כלל שלוש פעמים לאותה תוכנה: הרשומה
+          // ברישום, הקיצור בתפריט התחל ורשומת ה-Store. זו אינה עמימות אלא
+          // אותו יעד משלושה מקורות, ולכן נבחר המדויק שבהם - נתיב מלא עדיף
+          // על קיצור, וקיצור עדיף על AppID. עמימות אמיתית היא רק כשנשארות
+          // כמה התאמות מדויקות מאותו סוג, כלומר שתי תוכנות שונות באמת.
+          const ORDER = ['app-path', 'shortcut', 'store'];
+          let best = exact;
+          for (const type of ORDER) {
+            const tier = exact.filter((c) => c.type === type);
+            if (tier.length) { best = tier; break; }
+          }
+
+          const pick = best.length === 1 ? best[0]
+                     : (candidates.length === 1 ? candidates[0] : null);
+
+          if (pick) return launchTarget(pick.target);
+
+          return res.status(409).json({
+            success: false,
+            error: `'${appTarget}' לא נפתח ישירות, אבל נמצאו ${candidates.length} התאמות במחשב. ` +
+                   'בחר אחת והפעל שוב את open_app עם הערך המדויק בשדה path.',
+            data: { candidates }
+          });
+        };
+
+        // שם שנופל בבדיקת התווים אינו בהכרח שם פסול: "Notepad++", "Google
+        // Chrome" ושמות בעברית נופלים בה כולם. מה שאסור הוא רק להעביר אותו
+        // כפי שהוא ל-cmd. לכן במקום לדחות, מחפשים אותו במחשב ומפעילים יעד
+        // מאומת שחזר מ-Windows עצמו - נתיב מהרישום או AppID של אפליקציה.
+        // ההבחנה כאן היא בין שם שנפסל כי הוא לא בטוח לבין שם שנפסל כי הוא
+        // פשוט לא ASCII. "Notepad++" ו-"Google Chrome" הם שמות לגיטימיים
+        // שנופלים בבדיקה, ואותם כדאי לחפש. שם שמכיל & או | או גרש הפוך אינו
+        // שם של תוכנה אלא ניסיון הזרקה, והוא נדחה מיד ובקול - גם אם בפועל
+        // הוא כבר לא היה מגיע ל-cmd, כי רק יעד מאומת מ-Windows מופעל.
+        // התווים: & | ; ` $ < > ^ " ' ופסיק-נקודה, לצד תווי בקרה.
+        const SHELL_META = [38, 124, 59, 96, 36, 60, 62, 94, 34, 39]
+          .map((c) => String.fromCharCode(c));
+        const looksHostile = Array.from(appTarget)
+          .some((ch) => SHELL_META.includes(ch) || ch.charCodeAt(0) < 32);
+        if (!SAFE_EXE.test(targetToRun) && !SAFE_URI.test(targetToRun)) {
+          if (looksHostile || appTarget.length > 120) {
+            return res.status(400).json({
+              success: false,
+              error: `שם היישום '${appTarget}' מכיל תווים שאינם מורשים.`
+            });
+          }
+          await resolveAndLaunch(
+            `היישום '${appTarget}' אינו ניתן להרצה ישירה, ולא נמצאה לו התאמה מותקנת במחשב.`
+          );
+          return;
+        }
 
         if (targetToRun.includes(':')) {
           // פרוטוקול: קיים רק אם ה-scheme רשום ב-Registry
@@ -835,15 +906,16 @@ Write-Output "GEMMCP_TARGET_PIDS $($kin -join ',') $($proc.ProcessName)"
             launchTarget();
           });
         } else {
-          // קובץ הרצה: קיים רק אם where.exe מוצא אותו ב-PATH
-          execFile('where.exe', [targetToRun], { timeout: LAUNCH_TIMEOUT_MS }, (whereErr) => {
-            if (whereErr) {
-              return res.status(404).json({
-                success: false,
-                error: `היישום '${appTarget}' לא נמצא במחשב ('${targetToRun}' אינו קיים ב-PATH).`
-              });
-            }
-            launchTarget();
+          // קובץ הרצה. where.exe בודק PATH בלבד, ורוב התוכנות במחשב אינן שם:
+          // כרום, Office, ספוטיפיי ואפליקציות Store לא רושמות את עצמן ב-PATH.
+          // לכן כשלון של where אינו "לא מותקן" אלא רק "לא ב-PATH", וממשיכים
+          // לחפש במקומות שבהם Windows באמת רושם תוכנות.
+          execFile('where.exe', [targetToRun], { timeout: LAUNCH_TIMEOUT_MS }, async (whereErr) => {
+            if (!whereErr) return launchTarget();
+            await resolveAndLaunch(
+              `היישום '${appTarget}' לא נמצא במחשב. חיפשתי ב-PATH, ` +
+              'ברישום (App Paths), בקיצורים של תפריט התחל ובאפליקציות Store.'
+            );
           });
         }
         return;

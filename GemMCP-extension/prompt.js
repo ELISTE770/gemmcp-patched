@@ -214,6 +214,8 @@ const WINDOWS_TOOL_LINES = `Format response strictly as a JSON object for Window
 - move_file:      {"service": "windows", "action": "move_file", "from": "<path>", "to": "<path>"}
 - delete_file:    {"service": "windows", "action": "delete_file", "path": "<path>"}   (Recycle Bin; add "recursive": true for a non-empty folder)
 - open_app:       {"service": "windows", "action": "open_app", "app_name": "<name>"}
+                  אם התשובה מכילה candidates, התוכנה מותקנת אך יש כמה התאמות.
+                  הצג אותן למשתמש וקרא שוב עם "path" של זו שבחר, לא עם app_name.
 - clipboard_read: {"service": "windows", "action": "clipboard_read"}
 - clipboard_write:{"service": "windows", "action": "clipboard_write", "text": "<text>"}
 - download_file:  {"service": "windows", "action": "download_file", "url": "<https url>", "filename": "<optional>"}
