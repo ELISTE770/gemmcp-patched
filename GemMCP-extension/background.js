@@ -551,49 +551,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
-  // מסד הנתונים המקומי. גם הוא עובר דרך ה-worker מאותה סיבה: הדף עצמו
-  // אינו רשאי לפנות ל-localhost.
-  if (request.action === 'DB_REQUEST') {
-    (async () => {
-      // רשימה סגורה של נתיבים. בלי זה הודעה מהדף הייתה יכולה לבחור כל
-      // נתיב שהוא בגשר, וה-worker הוא היחיד שרשאי לדבר איתו.
-      const ROUTES = {
-        list:  { path: '/api/db/collections', method: 'GET' },
-        index: { path: '/api/db/index',       method: 'POST' },
-        query: { path: '/api/db/query',       method: 'POST' },
-        clear: { path: '/api/db/clear',       method: 'POST' }
-      };
-      const route = ROUTES[String(request.op || '')];
-      if (!route) {
-        sendResponse({ success: false, error: `פעולת מסד לא מוכרת: ${request.op}` });
-        return;
-      }
-      try {
-        // איסוף מלא נמשך שניות ארוכות, ולכן פסק הזמן כאן נדיב בהרבה
-        // מזה של פקודה רגילה.
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 120000);
-        const opts = {
-          method: route.method,
-          headers: await buildBridgeHeaders(),
-          signal: ctrl.signal
-        };
-        if (route.method === 'POST') opts.body = JSON.stringify(request.payload || {});
-        const res = await fetch('http://127.0.0.1:3000' + route.path, opts);
-        clearTimeout(timer);
-        sendResponse(await res.json());
-      } catch (e) {
-        sendResponse({
-          success: false,
-          error: e.name === 'AbortError'
-            ? 'האיסוף לא הסתיים בזמן.'
-            : (e.message || 'שרת הגשר אינו מגיב.')
-        });
-      }
-    })();
-    return true;
-  }
-
   if (request.action === 'EXECUTE_MCP_TOOL') {
     const from = sender && sender.tab && sender.tab.url;
     if (!from || !from.startsWith('https://gemini.google.com/')) {

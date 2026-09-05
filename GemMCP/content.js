@@ -328,16 +328,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             </div>
           </details>
 
-          <details class="omni-mcp-logs-details" id="omni-mcp-db-details">
-            <summary class="omni-mcp-logs-summary">
-              <span class="omni-mcp-logs-arrow">▾</span>
-              <span>מסד נתונים מקומי</span>
-              <span style="flex:1"></span>
-              <span id="omni-mcp-db-refresh" title="רענון מצב"
-                    style="font-size:10.5px; color:#94a3b8; cursor:pointer; user-select:none;">רענן</span>
-            </summary>
-            <div id="omni-mcp-db-jobs" style="display:flex; flex-direction:column; gap:8px; margin-top:6px;"></div>
-          </details>
 
           <div id="omni-mcp-pending-actions"></div>
 
@@ -379,7 +369,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     restorePersistedLog();
     wireLogControls();
     wireScheduleControls();
-    wireDbControls();
     wireScopeControl();
 
     renderServicesList();
@@ -1014,140 +1003,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   // ---------------------------------------------------------------------------
-  // מסד הנתונים המקומי.
-  //
-  // סריקת המחשב עולה שניות ארוכות בכל פעם מחדש. כאן המשתמש מריץ איסוף פעם
-  // אחת, ומשם אותה שאלה נענית מקובץ תוך מילישניות - וגם כשאין רשת.
-  // ---------------------------------------------------------------------------
-  function dbRequest(op, payload) {
-    return new Promise((resolve) => {
-      try {
-        chrome.runtime.sendMessage({ action: 'DB_REQUEST', op, payload }, (res) => {
-          if (chrome.runtime.lastError) {
-            resolve({ success: false, error: chrome.runtime.lastError.message });
-            return;
-          }
-          resolve(res || { success: false, error: 'אין תשובה מהתוסף' });
-        });
-      } catch (e) {
-        resolve({ success: false, error: e.message });
-      }
-    });
-  }
-
-  function formatCollected(iso, count) {
-    if (!iso) return 'טרם נאסף';
-    const d = new Date(iso);
-    if (isNaN(d.getTime())) return 'טרם נאסף';
-    const when = d.toLocaleString('he-IL', {
-      day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'
-    });
-    return count + ' רשומות · ' + when;
-  }
-
-  let dbBusy = false;
-
-  async function renderDbJobs() {
-    const host = document.getElementById('omni-mcp-db-jobs');
-    if (!host) return;
-    host.textContent = 'טוען...';
-
-    const res = await dbRequest('list');
-    if (!res || !res.success) {
-      host.textContent = (res && res.error) || 'שרת הגשר אינו מגיב';
-      return;
-    }
-
-    const data = res.data || {};
-    const collections = Array.isArray(data.collections) ? data.collections : [];
-    const jobs = Array.isArray(data.jobs) ? data.jobs : [];
-    const byName = {};
-    collections.forEach((c) => { byName[c.name] = c; });
-
-    host.textContent = '';
-    jobs.forEach((job) => {
-      // נבנה ב-DOM ולא ב-innerHTML. התיאורים מגיעים מהשרת, וכבר הייתה כאן
-      // תקלה שבה טקסט חיצוני נפרס כ-HTML בתוך הדף של ג'מיני.
-      const row = document.createElement('div');
-      row.style.cssText = 'display:flex; flex-direction:column; gap:3px; padding:7px 9px;' +
-        'border:1px solid #d5dbe3; border-radius:8px; background:#f7f9fc;';
-
-      const top = document.createElement('div');
-      top.style.cssText = 'display:flex; align-items:center; gap:6px;';
-
-      const title = document.createElement('span');
-      title.style.cssText = 'font-size:11.5px; font-weight:600; color:#1e293b;';
-      title.textContent = job.label || job.name;
-
-      const spacer = document.createElement('span');
-      spacer.style.flex = '1';
-
-      const btn = document.createElement('button');
-      btn.className = 'omni-mcp-action-btn';
-      btn.style.cssText = 'font-size:11px; padding:4px 10px;';
-      btn.textContent = 'אסוף';
-
-      top.appendChild(title);
-      top.appendChild(spacer);
-      top.appendChild(btn);
-
-      const desc = document.createElement('div');
-      desc.style.cssText = 'font-size:10.5px; color:#64748b; line-height:1.45;';
-      desc.textContent = job.description || '';
-
-      const state = document.createElement('div');
-      state.style.cssText = 'font-size:10px; color:#94a3b8;';
-      const known = byName[job.name];
-      state.textContent = known ? formatCollected(known.updatedAt, known.count) : 'טרם נאסף';
-
-      row.appendChild(top);
-      row.appendChild(desc);
-      row.appendChild(state);
-      host.appendChild(row);
-
-      btn.addEventListener('click', async () => {
-        // איסוף אחד בכל פעם: שתי סריקות PowerShell במקביל רק מאטות זו את זו,
-        // והשרת ממילא דוחה את השנייה.
-        if (dbBusy) return;
-        dbBusy = true;
-        btn.disabled = true;
-        const previous = state.textContent;
-        state.textContent = 'אוסף... זה יכול לקחת כמה שניות';
-        addLog('מתחיל איסוף: ' + (job.label || job.name));
-
-        const out = await dbRequest('index', { job: job.name });
-        dbBusy = false;
-        btn.disabled = false;
-
-        if (out && out.success && out.data) {
-          state.textContent = formatCollected(out.data.updatedAt, out.data.count);
-          addLog('נאספו ' + out.data.count + ' רשומות עבור ' + (job.label || job.name));
-        } else {
-          state.textContent = previous;
-          addLog('האיסוף נכשל: ' + ((out && out.error) || 'שגיאה לא ידועה'), { error: true });
-        }
-      });
-    });
-  }
-
-  function wireDbControls() {
-    const details = document.getElementById('omni-mcp-db-details');
-    const refresh = document.getElementById('omni-mcp-db-refresh');
-    // נטען רק כשפותחים את הקטע. אין סיבה לפנות לגשר בכל טעינת דף.
-    if (details) {
-      details.addEventListener('toggle', () => {
-        if (details.open) renderDbJobs();
-      });
-    }
-    if (refresh) {
-      refresh.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        renderDbJobs();
-      });
-    }
-  }
-
   function wireScheduleControls() {
     const addBtn = document.getElementById('omni-mcp-schedule-add');
     const details = document.getElementById('omni-mcp-schedule-details');

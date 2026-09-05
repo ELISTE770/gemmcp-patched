@@ -245,6 +245,136 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
 
+
+  // -------------------------------------------------------------------------
+  // מסד הנתונים המקומי.
+  //
+  // סריקת המחשב עולה שניות ארוכות בכל פעם מחדש. כאן המשתמש מריץ איסוף פעם
+  // אחת, ומשם אותה שאלה נענית מקובץ תוך מילישניות - וגם כשאין רשת.
+  // -------------------------------------------------------------------------
+  const localDbJobsHost = document.getElementById('local-db-jobs');
+  let localDbLoaded = false;
+  let localDbBusy = false;
+
+  function formatCollected(iso, count) {
+    if (!iso) return 'טרם נאסף';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return 'טרם נאסף';
+    const when = d.toLocaleString(currentLang === 'he' ? 'he-IL' : 'en-GB', {
+      day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'
+    });
+    return count + (currentLang === 'he' ? ' רשומות · ' : ' records · ') + when;
+  }
+
+  function renderLocalDb(data) {
+    if (!localDbJobsHost) return;
+    const collections = Array.isArray(data.collections) ? data.collections : [];
+    const jobs = Array.isArray(data.jobs) ? data.jobs : [];
+    const byName = {};
+    collections.forEach((c) => { byName[c.name] = c; });
+
+    localDbJobsHost.textContent = '';
+    jobs.forEach((job) => {
+      // נבנה ב-DOM ולא ב-innerHTML: התיאורים מגיעים מהשרת, וכבר הייתה בפרויקט
+      // תקלה שבה טקסט חיצוני נפרס כ-HTML.
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex; flex-direction:column; gap:3px; padding:7px 9px;' +
+        'border:1px solid #e2e8f0; border-radius:8px; background:#fbfdff;';
+
+      const top = document.createElement('div');
+      top.style.cssText = 'display:flex; align-items:center; gap:6px;';
+
+      const title = document.createElement('span');
+      title.style.cssText = 'font-size:11.5px; font-weight:600; color:#1e293b;' +
+        'unicode-bidi:plaintext; text-align:start;';
+      title.textContent = job.label || job.name;
+
+      const spacer = document.createElement('span');
+      spacer.style.flex = '1';
+
+      const btn = document.createElement('button');
+      btn.className = 'omni-mcp-action-btn';
+      btn.style.cssText = 'font-size:11px; padding:4px 12px; border-radius:6px; cursor:pointer;' +
+        'border:1px solid #3b82f6; background:#3b82f6; color:#fff; font-weight:600;';
+      btn.textContent = currentLang === 'he' ? 'אסוף' : 'Collect';
+
+      top.appendChild(title);
+      top.appendChild(spacer);
+      top.appendChild(btn);
+
+      const desc = document.createElement('div');
+      desc.style.cssText = 'font-size:10.5px; color:#64748b; line-height:1.45;' +
+        'unicode-bidi:plaintext; text-align:start;';
+      desc.textContent = job.description || '';
+
+      const state = document.createElement('div');
+      state.style.cssText = 'font-size:10px; color:#94a3b8; unicode-bidi:plaintext; text-align:start;';
+      const known = byName[job.name];
+      state.textContent = known ? formatCollected(known.updatedAt, known.count) : 'טרם נאסף';
+
+      row.appendChild(top);
+      row.appendChild(desc);
+      row.appendChild(state);
+      localDbJobsHost.appendChild(row);
+
+      btn.addEventListener('click', async () => {
+        // איסוף אחד בכל פעם: שתי סריקות PowerShell במקביל רק מאטות זו את זו,
+        // והשרת ממילא דוחה את השנייה.
+        if (localDbBusy) return;
+        localDbBusy = true;
+        btn.disabled = true;
+        const previous = state.textContent;
+        state.textContent = currentLang === 'he'
+          ? 'אוסף... זה יכול לקחת כמה שניות'
+          : 'Collecting... this can take a few seconds';
+        try {
+          const res = await fetch('http://127.0.0.1:3000/api/db/index', {
+            method: 'POST',
+            headers: await buildPopupBridgeHeaders(),
+            body: JSON.stringify({ job: job.name })
+          });
+          const json = await res.json();
+          if (!json || !json.success) throw new Error((json && json.error) || 'שגיאה');
+          state.textContent = formatCollected(json.data.updatedAt, json.data.count);
+        } catch (e) {
+          state.textContent = previous;
+          showStatus((e && e.message) || 'האיסוף נכשל', 'error');
+        } finally {
+          localDbBusy = false;
+          btn.disabled = false;
+        }
+      });
+    });
+  }
+
+  async function loadLocalDb() {
+    if (!localDbJobsHost) return;
+    localDbJobsHost.textContent = currentLang === 'he' ? 'טוען...' : 'Loading...';
+    try {
+      const res = await fetch('http://127.0.0.1:3000/api/db/collections', {
+        headers: await buildPopupBridgeHeaders()
+      });
+      const json = await res.json();
+      if (!json || !json.success) throw new Error((json && json.error) || 'שגיאה');
+      renderLocalDb(json.data || {});
+      localDbLoaded = true;
+    } catch (e) {
+      localDbJobsHost.textContent = currentLang === 'he'
+        ? 'שרת הגשר אינו מגיב. הפעל אותו ונסה שוב.'
+        : 'The bridge is not responding. Start it and try again.';
+    }
+  }
+
+  // נטען רק כשפותחים את הכרטיס, ולא בכל פתיחה של הפופאפ.
+  const localDbCard = document.getElementById('local-db-card');
+  if (localDbCard) {
+    const localDbHeader = localDbCard.querySelector('.service-header');
+    if (localDbHeader) {
+      localDbHeader.addEventListener('click', () => {
+        if (localDbCard.classList.contains('open') && !localDbLoaded) loadLocalDb();
+      });
+    }
+  }
   // -------------------------------------------------------------------------
   // הגדרות הגשר.
   //
