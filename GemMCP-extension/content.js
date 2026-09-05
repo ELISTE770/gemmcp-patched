@@ -2006,6 +2006,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     make_dir:        { level: 'warn',    label: 'יצירת תיקייה',       icon: '📁' },
     find_files:      { level: 'safe',    label: 'חיפוש קבצים',        icon: '🔍' },
     open_app:        { level: 'safe',    label: 'פתיחת תוכנה',        icon: '🚀' },
+    // בתוכנית נקראת הטבלה הזו ישירות, בלי הסיווג הדינמי, ולכן ההנחה כאן
+    // היא הזהירה. פעולה בודדת מסווגת לפי מה שהיא באמת מריצה.
+    github_cli:      { level: 'danger',  label: 'פעולת GitHub',       icon: '🐙' },
     media_control:   { level: 'safe',    label: 'שליטה בנגן',          icon: '🎵' },
     // הורדה מהאינטרנט מביאה קובץ ממקור חיצוני אל הדיסק. זו כתיבה, והמקור
     // אינו בשליטת המשתמש - ולכן היא בדרג המסוכן ולא ב'שינוי'.
@@ -2032,7 +2035,31 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   const PLAN_RISK_ORDER = { safe: 0, warn: 1, danger: 2 };
 
+  // תת-פקודות של gh שאינן משנות דבר. הרשימה מקבילה לזו שבשרת - שם היא
+  // נאכפת, כאן היא רק מחליטה אם להראות כרטיס אישור.
+  const GH_READ_SUBCOMMANDS = new Set(['list', 'view', 'status', 'diff', 'checks', 'search', 'download', 'ls']);
+  const GH_READ_COMMANDS = new Set(['status', 'search', 'browse']);
+
+  function classifyGithubCli(toolCall) {
+    const p = toolCall.params && typeof toolCall.params === 'object' ? toolCall.params : toolCall;
+    const args = Array.isArray(p.args) ? p.args : [];
+    const cmd = String(args[0] || '').toLowerCase();
+    const sub = String(args[1] || '').toLowerCase();
+    const readOnly = GH_READ_COMMANDS.has(cmd) || GH_READ_SUBCOMMANDS.has(sub);
+    const label = ('GitHub: ' + cmd + ' ' + sub).trim();
+    // מסוכן, אך בלי alwaysAsk. מחיקת מאגר אינה חמורה יותר ממחיקת קובץ,
+    // וזו כבר רצה במצב אוטונומי - החרגה כאן הייתה חוסר עקביות ולא הגנה.
+    return readOnly ? { level: 'safe', label, icon: '🐙' }
+                    : { level: 'danger', label, icon: '🐙' };
+  }
+
   function classifyAction(toolCall) {
+    // github_cli מסוכן או בטוח לפי מה שהוא מריץ, לא לפי שמו: gh repo list
+    // ו-gh repo delete הן אותה פעולה בטבלה, ולסווג אותן יחד פירושו או
+    // לעצור על הכל או לא לעצור על כלום.
+    const bare = String(toolCall.action || toolCall.tool_name || '').replace(/^[a-z]+:/, '');
+    if (bare === 'github_cli') return classifyGithubCli(toolCall);
+
     // תוכנית מקבלת את דרגת הסיכון של השלב המסוכן ביותר שבה. אחרת שלב הרסני
     // אחד היה מסתתר בתוך רשימה שנראית תמימה.
     if (Array.isArray(toolCall.plan) && toolCall.plan.length) {
@@ -2105,6 +2132,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       case 'media_control':   return `לשלוח פקודת מדיה: ${t(toolCall.command)}`;
       case 'download_file':   return `להוריד מהאינטרנט: ${t(toolCall.url)}`;
       case 'install_from_url': return `להוריד ולהתקין מ: ${t(toolCall.url)}`;
+      case 'github_cli': {
+        // הכרטיס חייב להראות את הפקודה המלאה. "פעולת GitHub" לבדה אינו
+        // מספיק כדי להחליט, כשההבדל בין list ל-delete הוא כל העניין.
+        const p = toolCall.params && typeof toolCall.params === 'object' ? toolCall.params : toolCall;
+        const args = Array.isArray(p.args) ? p.args : [];
+        return `להריץ ב-GitHub: gh ${t(args.join(' '))}`;
+      }
       case 'manage_windows':  return toolCall.command === 'focus'
                                 ? `להביא לקדמת המסך את "${t(toolCall.app_name)}"`
                                 : 'לקבל את רשימת החלונות הפתוחים';

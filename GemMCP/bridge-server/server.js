@@ -675,7 +675,12 @@ function buildCeiling() {
     // בכל פעם וניתנת לביטול.
     //
     // מי שרוצה להשבית לגמרי, בלי תלות בתוסף: WIN_PERM_INSTALL=false ב-.env.
-    allowInstall: process.env.WIN_PERM_INSTALL !== 'false'
+    allowInstall: process.env.WIN_PERM_INSTALL !== 'false',
+
+    // GitHub CLI. פתוח כברירת מחדל כי הוא מוגבל ממילא ברשימת פקודות,
+    // ומה שמשנה מצב עוצר לאישור בתוסף. מי שרוצה לסגור לגמרי:
+    // WIN_PERM_GITHUB_CLI=false
+    githubCli: process.env.WIN_PERM_GITHUB_CLI !== 'false'
   };
 }
 
@@ -814,6 +819,7 @@ function resolvePermissions(clientPerms = {}) {
     launchApps: narrow(SERVER_CEILING.launchApps, clientPerms.launchApps),
     clipboard: narrow(SERVER_CEILING.clipboard, clientPerms.clipboard),
     allowInstall: narrow(SERVER_CEILING.allowInstall, clientPerms.allowInstall),
+    githubCli: narrow(SERVER_CEILING.githubCli, clientPerms.githubCli),
     allowedPath,
     readPath
   };
@@ -1142,6 +1148,7 @@ app.get('/api/health', (req, res) => {
       runCommands: SERVER_CEILING.runCommands,
       launchApps: SERVER_CEILING.launchApps,
       clipboard: SERVER_CEILING.clipboard,
+      githubCli: SERVER_CEILING.githubCli,
       allowedPath: SERVER_ALLOWED_PATH || '*'
     },
     supabaseWrites: SUPABASE_ALLOW_WRITES

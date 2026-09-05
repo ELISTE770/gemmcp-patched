@@ -62,6 +62,12 @@ const SCHEMA = [
     description: 'תקרה בלבד. גם כשהיא דלוקה, כל התקנה עוצרת לאישור וניתנת לביטול.',
   },
 
+  {
+    key: 'WIN_PERM_GITHUB_CLI', type: 'bool', group: 'permissions', def: true,
+    label: 'GitHub דרך המחשב',
+    description: 'שימוש ב-gh שכבר מחובר במחשב, במקום טוקן נפרד. מוגבל לרשימת פקודות, ומה שמשנה מצב עוצר לאישור.',
+  },
+
   // --- תחומים ---
   {
     key: 'WIN_READ_PATH', type: 'path', group: 'scope', def: '*',

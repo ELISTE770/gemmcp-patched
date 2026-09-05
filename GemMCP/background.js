@@ -1170,6 +1170,163 @@ async function executeGitHub(toolCall, config) {
     };
   }
 
+  // ---------------------------------------------------------------------------
+  // עוזר משותף. בלעדיו כל פעולה חוזרת על אותן שש שורות של fetch, בדיקת
+  // סטטוס וחילוץ הודעת השגיאה - ואז אחת מהן שוכחת את הבדיקה.
+  // ---------------------------------------------------------------------------
+  async function gh(pathname, options) {
+    const opts = options || {};
+    const res = await fetch(`https://api.github.com${pathname}`, {
+      method: opts.method || 'GET',
+      headers: opts.body ? { ...headers, 'Content-Type': 'application/json' } : headers,
+      body: opts.body ? JSON.stringify(opts.body) : undefined
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      // ההודעה של GitHub מסבירה בדיוק מה חסר - למשל אילו הרשאות אין לטוקן -
+      // ולכן היא שווה הרבה יותר מ-statusText.
+      throw new Error(`GitHub (${res.status}): ${err.message || res.statusText}`);
+    }
+    if (res.status === 204) return { ok: true };
+    return await res.json();
+  }
+
+  function needRepo(repo) {
+    if (!repo || !String(repo).includes('/')) {
+      throw new Error('חסר שם מאגר בפורמט owner/name');
+    }
+    return String(repo);
+  }
+
+  if (action === 'get_repo' || action === 'github:get_repo') {
+    const r = await gh(`/repos/${needRepo(toolCall.repo)}`);
+    return {
+      full_name: r.full_name, description: r.description, private: r.private,
+      default_branch: r.default_branch, stars: r.stargazers_count, forks: r.forks_count,
+      open_issues: r.open_issues_count, url: r.html_url, updated_at: r.updated_at
+    };
+  }
+
+  if (action === 'list_issues' || action === 'github:list_issues') {
+    const state = toolCall.state || 'open';
+    const rows = await gh(`/repos/${needRepo(toolCall.repo)}/issues?state=${encodeURIComponent(state)}&per_page=20`);
+    return rows
+      .filter((i) => !i.pull_request)   // GitHub מחזיר גם PRs בנתיב הזה
+      .map((i) => ({ number: i.number, title: i.title, state: i.state,
+                     author: i.user && i.user.login, comments: i.comments, url: i.html_url }));
+  }
+
+  if (action === 'list_commits' || action === 'github:list_commits') {
+    const rows = await gh(`/repos/${needRepo(toolCall.repo)}/commits?per_page=15`);
+    return rows.map((c) => ({
+      sha: c.sha.slice(0, 7),
+      message: (c.commit.message || '').split('\n')[0],
+      author: c.commit.author && c.commit.author.name,
+      date: c.commit.author && c.commit.author.date,
+      url: c.html_url
+    }));
+  }
+
+  if (action === 'list_branches' || action === 'github:list_branches') {
+    const rows = await gh(`/repos/${needRepo(toolCall.repo)}/branches?per_page=50`);
+    return rows.map((b) => ({ name: b.name, protected: b.protected }));
+  }
+
+  if (action === 'list_prs' || action === 'github:list_prs') {
+    const state = toolCall.state || 'open';
+    const rows = await gh(`/repos/${needRepo(toolCall.repo)}/pulls?state=${encodeURIComponent(state)}&per_page=20`);
+    return rows.map((p) => ({ number: p.number, title: p.title, state: p.state,
+                              author: p.user && p.user.login, draft: p.draft,
+                              base: p.base && p.base.ref, head: p.head && p.head.ref, url: p.html_url }));
+  }
+
+  if (action === 'create_or_update_file' || action === 'github:create_or_update_file') {
+    const repo = needRepo(toolCall.repo);
+    const { path: filePath, content, message, branch } = toolCall;
+    if (!filePath || content === undefined) throw new Error('חסר path או content');
+
+    // עדכון קובץ קיים דורש את ה-sha שלו. בלעדיו GitHub מחזיר 422 שנראה
+    // כמו שגיאת הרשאה ואינו מסביר שהקובץ פשוט כבר קיים.
+    let sha = toolCall.sha || '';
+    if (!sha) {
+      try {
+        const existing = await gh(`/repos/${repo}/contents/${filePath}` + (branch ? `?ref=${encodeURIComponent(branch)}` : ''));
+        if (existing && existing.sha) sha = existing.sha;
+      } catch (e) { /* לא קיים - יצירה חדשה */ }
+    }
+
+    const bytes = new TextEncoder().encode(String(content));
+    let bin = '';
+    bytes.forEach((b) => { bin += String.fromCharCode(b); });
+
+    const body = { message: message || `Update ${filePath}`, content: btoa(bin) };
+    if (sha) body.sha = sha;
+    if (branch) body.branch = branch;
+
+    const out = await gh(`/repos/${repo}/contents/${filePath}`, { method: 'PUT', body });
+    return {
+      message: sha ? `הקובץ '${filePath}' עודכן` : `הקובץ '${filePath}' נוצר`,
+      path: filePath,
+      commit: out.commit && out.commit.sha,
+      url: out.content && out.content.html_url
+    };
+  }
+
+  if (action === 'delete_repo_file' || action === 'github:delete_repo_file') {
+    const repo = needRepo(toolCall.repo);
+    const { path: filePath, message, branch } = toolCall;
+    if (!filePath) throw new Error('חסר path');
+    const existing = await gh(`/repos/${repo}/contents/${filePath}` + (branch ? `?ref=${encodeURIComponent(branch)}` : ''));
+    if (!existing || !existing.sha) throw new Error(`הקובץ '${filePath}' לא נמצא במאגר`);
+    const body = { message: message || `Delete ${filePath}`, sha: existing.sha };
+    if (branch) body.branch = branch;
+    await gh(`/repos/${repo}/contents/${filePath}`, { method: 'DELETE', body });
+    return { message: `הקובץ '${filePath}' נמחק מ-${repo}` };
+  }
+
+  if (action === 'create_pull_request' || action === 'github:create_pull_request') {
+    const repo = needRepo(toolCall.repo);
+    const { title, head, base, body } = toolCall;
+    if (!title || !head || !base) throw new Error('חסר title, head או base');
+    const pr = await gh(`/repos/${repo}/pulls`, { method: 'POST', body: { title, head, base, body: body || '' } });
+    return { number: pr.number, title: pr.title, url: pr.html_url, state: pr.state };
+  }
+
+  if (action === 'comment_issue' || action === 'github:comment_issue') {
+    const repo = needRepo(toolCall.repo);
+    const { number, body } = toolCall;
+    if (!number || !body) throw new Error('חסר number או body');
+    const c = await gh(`/repos/${repo}/issues/${number}/comments`, { method: 'POST', body: { body } });
+    return { url: c.html_url, created_at: c.created_at };
+  }
+
+  if (action === 'close_issue' || action === 'github:close_issue') {
+    const repo = needRepo(toolCall.repo);
+    const { number } = toolCall;
+    if (!number) throw new Error('חסר number');
+    const i = await gh(`/repos/${repo}/issues/${number}`, { method: 'PATCH', body: { state: 'closed' } });
+    return { number: i.number, state: i.state, url: i.html_url };
+  }
+
+  // מחיקת מאגר היא בלתי הפיכה, והטוקן של התוסף לרוב אינו מורשה לה בכלל
+  // (נדרש scope 'delete_repo'). המסלול המעשי הוא github_cli, שרץ עם החשבון
+  // שכבר מחובר במחשב - אבל ההודעה חייבת להסביר את זה במקום להחזיר 403 סתום.
+  if (action === 'delete_repo' || action === 'github:delete_repo') {
+    const repo = needRepo(toolCall.repo);
+    try {
+      await gh(`/repos/${repo}`, { method: 'DELETE' });
+      return { message: `המאגר '${repo}' נמחק.` };
+    } catch (e) {
+      if (String(e.message).includes('403')) {
+        throw new Error(
+          `לטוקן של התוסף אין הרשאת delete_repo. אפשר למחוק דרך ה-gh שמחובר במחשב: ` +
+          `{"service":"windows","action":"github_cli","args":["repo","delete","${repo}","--yes"]}`
+        );
+      }
+      throw e;
+    }
+  }
+
   throw new Error(`פעולת GitHub לא נתמכת: ${action}`);
 }
 

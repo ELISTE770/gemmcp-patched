@@ -6,6 +6,7 @@ const { createFileActions } = require('./actions-files');
 const { readSmart } = require('./read-smart');
 const { createJob: createInstallJob, cancelJob: cancelInstallJob } = require('./install-jobs');
 const { resolveAppCandidates } = require('./resolve-app');
+const { runGh } = require('./github-cli');
 
 // נקרא בכל קריאה ולא פעם אחת בעליית התהליך, כדי ששינוי במסך ההגדרות
 // יחול על הפקודה הבאה ולא ידרוש הפעלה מחדש של הגשר.
@@ -929,6 +930,35 @@ Write-Output "GEMMCP_TARGET_PIDS $($kin -join ',') $($proc.ProcessName)"
         return;
       }
 
+      // GitHub דרך ה-CLI שכבר מאומת במחשב.
+      //
+      // הטוקן של התוסף מוגבל להרשאות שניתנו לו פעם, ופעולות כמו מחיקת
+      // מאגר פשוט נדחות בו. gh כבר מחובר עם החשבון האמיתי, ולכן זה גם
+      // עובד וגם חוסך ניהול של טוקן שני.
+      case 'github_cli': {
+        if (!perms.githubCli) {
+          return res.status(403).json({
+            success: false,
+            error: 'הרשאת GitHub דרך המחשב (WIN_PERM_GITHUB_CLI) כבויה בהגדרות.'
+          });
+        }
+        const ghArgs = Array.isArray(params.args) ? params.args : null;
+        if (!ghArgs) {
+          return res.status(400).json({
+            success: false,
+            error: 'חסר args - מערך של ארגומנטים ל-gh. לדוגמה: ["repo", "list"]'
+          });
+        }
+        try {
+          const out = await runGh(ghArgs, params.cwd);
+          auditLog('github_cli', { args: ghArgs }, 'success', out.readOnly ? 'read' : 'write');
+          return res.json({ success: true, data: out });
+        } catch (e) {
+          auditLog('github_cli', { args: ghArgs }, 'denied', e.message);
+          return res.status(e.status || 500).json({ success: false, error: e.message });
+        }
+      }
+
       // 6. פעולות קבצים נוספות: העתקה, העברה, מחיקה לסל, יצירת תיקייה, חיפוש
       case 'make_dir':
       case 'copy_file':
@@ -978,7 +1008,7 @@ Write-Output "GEMMCP_TARGET_PIDS $($kin -join ',') $($proc.ProcessName)"
       default:
         return res.status(400).json({
           success: false,
-          error: `פעולה לא מוכרת ב-Windows MCP: '${action}'. פעולות אפשריות: read_file, write_file, list_directory, run_command, open_app, clipboard_read, clipboard_write.`
+          error: `פעולה לא מוכרת ב-Windows MCP: '${action}'. פעולות אפשריות: read_file, write_file, list_directory, run_command, open_app, clipboard_read, clipboard_write, github_cli.`
         });
     }
   } catch (err) {

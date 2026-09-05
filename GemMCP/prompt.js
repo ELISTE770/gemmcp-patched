@@ -125,7 +125,7 @@ const OMNI_MCP_REGISTRY = {
     description: 'הפקת פקודות בפורמט JSON להרצה עצמאית במחשב: הפעלת תוכנות (קלוד, VS Code, מחשבון, כרום, ספוטיפיי, ווטסאפ, טלגרם, פנקס רשימות, וורד, אקסל), קריאה וכתיבת קבצים, חיפוש לפי תבנית, יצירת תיקייה, העתקה, העברה ומחיקה לסל המיחזור, סריקת תיקיות, הרצת פקודות PowerShell ולוח ההעתקה. למשימה מרובת שלבים יש להשתמש בשדה plan.',
     userIntentMapping: 'כל בקשה לפתיחת תוכנה או אפליקציה (למשל: "פתח מחשבון", "תפתח את קלוד", "פתח VS Code"), קריאת/כתיבת קבצים, סריקת תיקיות, שימוש ב-Clipboard או פקודות מערכת - החזר ישירות פקודת JSON עבור שירות windows.',
     schema: {
-      action: 'open_app | read_file | write_file | list_directory | find_files | make_dir | copy_file | move_file | delete_file | run_command | clipboard_read | clipboard_write',
+      action: 'open_app | read_file | write_file | list_directory | find_files | make_dir | copy_file | move_file | delete_file | run_command | clipboard_read | clipboard_write | github_cli',
       app_name: 'claude | vscode | code | calc | notepad | chrome | spotify | whatsapp | telegram | word | excel | explorer',
       path: 'נתיב מלא לקובץ או תיקייה במחשב',
       content: 'תוכן טקסט לכתיבה לקובץ',
@@ -149,7 +149,7 @@ const OMNI_MCP_REGISTRY = {
     name: 'GitHub Integration (ניהול קוד ומאגרים)',
     icon: '🐙',
     description: 'הפקת פקודות בפורמט JSON עבור GitHub (יצירת מאגרים, משיכת רשימת ריפו, קריאת קוד מקור, יצירת Issues).',
-    userIntentMapping: 'כל בקשה שקשורה ל: "גיטהאב", "GitHub", "ריפו", "צור ריפו", "מאגרים", "קוד מקור", "קרא קובץ מגיטהאב", "Issue" - החזר פקודת JSON עבור שירות github.',
+    userIntentMapping: 'כל בקשה שקשורה ל: "גיטהאב", "GitHub", "ריפו", "צור ריפו", "מחק ריפו", "מאגרים", "קוד מקור", "קרא קובץ מגיטהאב", "העלה קובץ", "קומיטים", "ברנצ\'ים", "Issue", "Pull Request", "PR" - החזר פקודת JSON עבור שירות github.',
     schema: {
       action: 'list_repos | get_file | create_issue | create_repo',
       repo: 'owner/repo_name',
@@ -216,6 +216,13 @@ const WINDOWS_TOOL_LINES = `Format response strictly as a JSON object for Window
 - open_app:       {"service": "windows", "action": "open_app", "app_name": "<name>"}
                   אם התשובה מכילה candidates, התוכנה מותקנת אך יש כמה התאמות.
                   הצג אותן למשתמש וקרא שוב עם "path" של זו שבחר, לא עם app_name.
+- github_cli:     {"service": "windows", "action": "github_cli", "args": ["repo", "list"]}
+                  GitHub דרך ה-gh שכבר מחובר במחשב - בלי טוקן נפרד, ועם ההרשאות
+                  המלאות של המשתמש. args הוא מערך, לא מחרוזת אחת.
+                  מותר: auth, repo, pr, issue, release, run, workflow, gist, label,
+                  api, search, browse, status, org, ruleset. api מוגבל ל-GET.
+                  דוגמאות: ["repo","view","owner/name","--json","name,visibility"]
+                           ["pr","list","--limit","5"]  ["release","list"]
 - clipboard_read: {"service": "windows", "action": "clipboard_read"}
 - clipboard_write:{"service": "windows", "action": "clipboard_write", "text": "<text>"}
 - download_file:  {"service": "windows", "action": "download_file", "url": "<https url>", "filename": "<optional>"}
@@ -241,10 +248,25 @@ const OMNI_DEFAULT_TOOL_PROMPTS = {
 - create_page: {"service": "notion", "action": "create_page", "title": "<title>", "content": "<content>"}`,
 
   github: `Format response strictly as a JSON object for GitHub:
-- list_repos: {"service": "github", "action": "list_repos"}
-- get_file: {"service": "github", "action": "get_file", "repo": "<owner/repo>", "path": "<path>"}
-- create_repo: {"service": "github", "action": "create_repo", "name": "<name>", "private": false}
-- create_issue: {"service": "github", "action": "create_issue", "repo": "<repo>", "title": "<title>", "body": "<body>"}`,
+- list_repos:            {"service": "github", "action": "list_repos"}
+- get_repo:              {"service": "github", "action": "get_repo", "repo": "<owner/repo>"}
+- get_file:              {"service": "github", "action": "get_file", "repo": "<owner/repo>", "path": "<path>", "branch": "main"}
+- create_or_update_file: {"service": "github", "action": "create_or_update_file", "repo": "<owner/repo>", "path": "<path>", "content": "<text>", "message": "<commit msg>"}
+- delete_repo_file:      {"service": "github", "action": "delete_repo_file", "repo": "<owner/repo>", "path": "<path>"}
+- list_commits:          {"service": "github", "action": "list_commits", "repo": "<owner/repo>"}
+- list_branches:         {"service": "github", "action": "list_branches", "repo": "<owner/repo>"}
+- list_issues:           {"service": "github", "action": "list_issues", "repo": "<owner/repo>", "state": "open"}
+- create_issue:          {"service": "github", "action": "create_issue", "repo": "<owner/repo>", "title": "<title>", "body": "<body>"}
+- comment_issue:         {"service": "github", "action": "comment_issue", "repo": "<owner/repo>", "number": 1, "body": "<text>"}
+- close_issue:           {"service": "github", "action": "close_issue", "repo": "<owner/repo>", "number": 1}
+- list_prs:              {"service": "github", "action": "list_prs", "repo": "<owner/repo>", "state": "open"}
+- create_pull_request:   {"service": "github", "action": "create_pull_request", "repo": "<owner/repo>", "title": "<t>", "head": "<branch>", "base": "main"}
+- create_repo:           {"service": "github", "action": "create_repo", "name": "<name>", "private": false}
+- delete_repo:           {"service": "github", "action": "delete_repo", "repo": "<owner/repo>"}
+
+לפעולות שהטוקן אינו מורשה להן - מחיקת מאגר היא המקרה הרגיל - יש מסלול שני
+דרך ה-gh שכבר מחובר במחשב, עם ההרשאות המלאות של המשתמש:
+  {"service": "windows", "action": "github_cli", "args": ["repo", "delete", "owner/name", "--yes"]}`,
 
   fetch: `Format response strictly as a JSON object for Web Fetch:
 - get_url: {"service": "fetch", "action": "get_url", "url": "<url>"}`
@@ -280,7 +302,7 @@ function generateOmniSystemPrompt(activeServices = ['supabase', 'notion', 'fetch
     toolSchemas.push(`- Windows OS (service: "windows"):
   Files:     read_file, write_file, list_directory, find_files
   Managing:  make_dir, copy_file, move_file, delete_file
-  Other:     open_app, clipboard_read, clipboard_write, run_command
+  Other:     open_app, clipboard_read, clipboard_write, run_command, github_cli
   System:    media_control, manage_windows
   Internet:  download_file, install_from_url
   PREFER the dedicated action over run_command. Use run_command ONLY when no
@@ -320,7 +342,9 @@ function generateOmniSystemPrompt(activeServices = ['supabase', 'notion', 'fetch
 
   if (activeServices.includes('github')) {
     toolSchemas.push(`- GitHub (service: "github"):
-  Actions: list_repos, get_file, create_repo, create_issue
+  Actions: list_repos, get_repo, get_file, create_or_update_file, delete_repo_file,
+           list_commits, list_branches, list_issues, create_issue, comment_issue,
+           close_issue, list_prs, create_pull_request, create_repo, delete_repo
   Example: {"service": "github", "action": "list_repos"}`);
   }
 
@@ -384,10 +408,25 @@ function generateSingleToolPrompt(serviceId, customServerConfig = null, customTo
 
   if (serviceId === 'github') {
     return `${userPrefix}Format response strictly as a JSON object for GitHub:
-- list_repos: {"service": "github", "action": "list_repos"}
-- get_file: {"service": "github", "action": "get_file", "repo": "<owner/repo>", "path": "<path>"}
-- create_repo: {"service": "github", "action": "create_repo", "name": "<name>", "private": false}
-- create_issue: {"service": "github", "action": "create_issue", "repo": "<repo>", "title": "<title>", "body": "<body>"}`;
+- list_repos:            {"service": "github", "action": "list_repos"}
+- get_repo:              {"service": "github", "action": "get_repo", "repo": "<owner/repo>"}
+- get_file:              {"service": "github", "action": "get_file", "repo": "<owner/repo>", "path": "<path>", "branch": "main"}
+- create_or_update_file: {"service": "github", "action": "create_or_update_file", "repo": "<owner/repo>", "path": "<path>", "content": "<text>", "message": "<commit msg>"}
+- delete_repo_file:      {"service": "github", "action": "delete_repo_file", "repo": "<owner/repo>", "path": "<path>"}
+- list_commits:          {"service": "github", "action": "list_commits", "repo": "<owner/repo>"}
+- list_branches:         {"service": "github", "action": "list_branches", "repo": "<owner/repo>"}
+- list_issues:           {"service": "github", "action": "list_issues", "repo": "<owner/repo>", "state": "open"}
+- create_issue:          {"service": "github", "action": "create_issue", "repo": "<owner/repo>", "title": "<title>", "body": "<body>"}
+- comment_issue:         {"service": "github", "action": "comment_issue", "repo": "<owner/repo>", "number": 1, "body": "<text>"}
+- close_issue:           {"service": "github", "action": "close_issue", "repo": "<owner/repo>", "number": 1}
+- list_prs:              {"service": "github", "action": "list_prs", "repo": "<owner/repo>", "state": "open"}
+- create_pull_request:   {"service": "github", "action": "create_pull_request", "repo": "<owner/repo>", "title": "<t>", "head": "<branch>", "base": "main"}
+- create_repo:           {"service": "github", "action": "create_repo", "name": "<name>", "private": false}
+- delete_repo:           {"service": "github", "action": "delete_repo", "repo": "<owner/repo>"}
+
+לפעולות שהטוקן אינו מורשה להן - מחיקת מאגר היא המקרה הרגיל - יש מסלול שני
+דרך ה-gh שכבר מחובר במחשב, עם ההרשאות המלאות של המשתמש:
+  {"service": "windows", "action": "github_cli", "args": ["repo", "delete", "owner/name", "--yes"]}`;
   }
 
   if (serviceId === 'fetch') {
