@@ -247,6 +247,88 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
 
+
+  // -------------------------------------------------------------------------
+  // עדכון גרסה.
+  //
+  // הגשר מוריד את הארכיון מ-GitHub, מאמת אותו מול חתימת ה-sha256 שהפרסום
+  // נושא, מגבה ומחליף קבצים. מה שאי אפשר לעשות מהקוד הוא לטעון מחדש תוסף
+  // שנטען כ-unpacked - זו לחיצה של המשתמש, ולכן היא נאמרת במפורש בסוף.
+  // -------------------------------------------------------------------------
+  const updateCheckBtn = document.getElementById('update-check-btn');
+  const updateApplyBtn = document.getElementById('update-apply-btn');
+  const updateStatusEl = document.getElementById('update-status');
+  const updateVersionEl = document.getElementById('update-version');
+
+  function sayUpdate(text, kind) {
+    if (!updateStatusEl) return;
+    updateStatusEl.textContent = text || '';
+    updateStatusEl.style.color = kind === 'error' ? '#b91c1c'
+      : (kind === 'success' ? '#15803d' : '#64748b');
+  }
+
+  if (updateVersionEl && chrome.runtime && chrome.runtime.getManifest) {
+    try { updateVersionEl.textContent = 'v' + chrome.runtime.getManifest().version; } catch (e) {}
+  }
+
+  async function checkForUpdate() {
+    sayUpdate(currentLang === 'he' ? 'בודק...' : 'Checking...');
+    if (updateApplyBtn) updateApplyBtn.hidden = true;
+    try {
+      const res = await fetch('http://127.0.0.1:3000/api/update/check', {
+        headers: await buildPopupBridgeHeaders()
+      });
+      const json = await res.json();
+      if (!json || !json.success) throw new Error((json && json.error) || 'שגיאה');
+      const d = json.data;
+      if (!d.newer) {
+        sayUpdate(`הגרסה ${d.current} היא העדכנית ביותר.`, 'success');
+        return;
+      }
+      sayUpdate(`יש גרסה חדשה: ${d.latest} (מותקנת ${d.current}).`);
+      if (updateApplyBtn) updateApplyBtn.hidden = false;
+    } catch (e) {
+      sayUpdate(currentLang === 'he'
+        ? 'שרת הגשר אינו מגיב. הפעל אותו ונסה שוב.'
+        : 'The bridge is not responding.', 'error');
+    }
+  }
+
+  async function applyUpdate() {
+    if (!updateApplyBtn) return;
+    updateApplyBtn.disabled = true;
+    sayUpdate(currentLang === 'he'
+      ? 'מוריד, מאמת חתימה ומחליף קבצים...'
+      : 'Downloading, verifying and replacing files...');
+    try {
+      const res = await fetch('http://127.0.0.1:3000/api/update/apply', {
+        method: 'POST',
+        headers: await buildPopupBridgeHeaders(),
+        body: JSON.stringify({})
+      });
+      const json = await res.json();
+      if (!json || !json.success) throw new Error((json && json.error) || 'שגיאה');
+      const d = json.data;
+      if (!d.updated) {
+        sayUpdate(`אין מה לעדכן (${d.reason}).`);
+        return;
+      }
+      // שני השלבים האלה אינם קישוט: בלעדיהם המשתמש חושב שסיים והוא עדיין
+      // מריץ את הגרסה הקודמת, כי הקבצים החדשים יושבים על הדיסק ולא נטענו.
+      sayUpdate(
+        `עודכן ל-${d.to}. נותרו שני שלבים: ` + (d.nextSteps || []).join(' · '),
+        'success'
+      );
+      updateApplyBtn.hidden = true;
+    } catch (e) {
+      sayUpdate((e && e.message) || 'העדכון נכשל', 'error');
+    } finally {
+      updateApplyBtn.disabled = false;
+    }
+  }
+
+  if (updateCheckBtn) updateCheckBtn.addEventListener('click', checkForUpdate);
+  if (updateApplyBtn) updateApplyBtn.addEventListener('click', applyUpdate);
   // -------------------------------------------------------------------------
   // השהיית התוסף.
   //

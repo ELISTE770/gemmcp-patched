@@ -648,14 +648,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
  * 🔄 הרצת עדכון אוטומטי מלא דרך שרת ה-Bridge
  */
 async function triggerBridgeUpdate() {
-  // העדכון האוטומטי מושבת בגרסה הזו. ה-endpoint /api/update שהוא קרא אליו הוסר
-  // מהשרת: הוא היה ללא אימות והריץ git pull / הורדת ZIP והחלפת קוד דרך
-  // PowerShell, כך שכל תהליך מקומי היה יכול להחליף את הקוד שרץ על המחשב.
-  // בנוסף, עדכון אוטומטי היה דורס את התיקונים המקומיים שגרסה זו מבוססת עליהם.
-  throw new Error(
-    'העדכון האוטומטי מושבת בגרסה המתוקנת הזו. ' +
-    'עדכן ידנית ובדוק קודם שהתיקונים המקומיים עדיין קיימים.'
-  );
+  // הגרסה הקודמת של הפונקציה הזו זרקה תמיד, כי ה-endpoint שהיא קראה אליו
+  // הוסר בצדק. הוא חזר בצורה אחרת: מאגר מקובע בקוד, אימות sha256 מול
+  // החתימה שהפרסום נושא, גיבוי לפני החלפה, ושום הרצה של תוכן הארכיון.
+  const res = await fetch('http://127.0.0.1:3000/api/update/apply', {
+    method: 'POST',
+    headers: await buildBridgeHeaders(),
+    body: JSON.stringify({})
+  });
+  const json = await res.json();
+  if (!json || !json.success) throw new Error((json && json.error) || 'העדכון נכשל');
+  return json.data;
 }
 
 /**

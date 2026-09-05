@@ -418,6 +418,13 @@ h1 {
 /* לכרטיס ההשהיה אין כותרת ללחוץ עליה, ולכן הוא חייב להיות פתוח תמיד -
    בדיוק כמו כרטיס מצב ההרצה. .service-body מוסתר ב-max-height:0, ולכן
    בלי open הוא היה בלתי נראה לחלוטין. */
+/* גם לכרטיס העדכון אין כותרת ללחוץ עליה, ולכן הוא חייב להיות פתוח תמיד. */
+#update-card .service-body {
+  max-height: none;
+  opacity: 1;
+  border-top: none;
+}
+
 #sleep-card { border-color: #fecaca; }
 #sleep-card .service-body {
   max-height: none;

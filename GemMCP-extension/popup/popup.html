@@ -105,6 +105,24 @@
       <div id="sleep-status" style="font-size:11px; color:#64748b; margin-top:6px;"></div>
     </div>
   </div>
+
+  <!-- עדכון מ-GitHub. את קבצי הגשר והתוסף אפשר להחליף על הדיסק; טעינה
+       מחדש של תוסף unpacked היא לחיצה של המשתמש, ואין דרך לעקוף את זה. -->
+  <div class="service-card" id="update-card">
+    <div class="service-body" style="max-height:none; padding:12px 14px;">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span style="font-size:12px; font-weight:700; color:#1e293b;" data-i18n="updateCardTitle">עדכון גרסה</span>
+        <span id="update-version" style="font-size:11px; color:#94a3b8;"></span>
+        <span style="flex:1"></span>
+        <button id="update-check-btn" class="btn-save"
+                style="font-size:11px; padding:4px 12px;" data-i18n="updateCheckBtn">בדוק</button>
+        <button id="update-apply-btn" class="btn-save" hidden
+                style="font-size:11px; padding:4px 12px; background:#16a34a; border-color:#16a34a;"
+                data-i18n="updateApplyBtn">עדכן עכשיו</button>
+      </div>
+      <div id="update-status" style="font-size:11px; color:#64748b; margin-top:6px; unicode-bidi:plaintext;"></div>
+    </div>
+  </div>
   <!-- מסד הנתונים המקומי: סריקה אחת של המחשב שנשמרת, במקום סריקה חוזרת
        בכל בקשה. אחרי איסוף אחד, פתיחת תוכנה נענית תוך מילישניות במקום
        שניות - וגם עובדת בלי רשת. -->

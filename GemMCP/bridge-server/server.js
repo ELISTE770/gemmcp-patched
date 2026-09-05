@@ -12,6 +12,7 @@ const { runPlan, MAX_STEPS } = require('./plan-runner');
 const localDb = require('./local-db');
 const indexers = require('./indexers');
 const settings = require('./settings');
+const updater = require('./updater');
 const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
@@ -1155,15 +1156,37 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// עדכון אוטומטי של התוסף ושרת ה-Bridge ישירות מ-GitHub
 // ---------------------------------------------------------------------------
-// /api/update הוסר בכוונה.
+// עדכון מ-GitHub
 //
-// בגרסה 2.1.2 הוא היה endpoint ללא שום אימות שמריץ git pull או מוריד ZIP
-// מ-GitHub ומחליף את הקוד המקומי דרך PowerShell. מכיוון שה-CORS מאשר גם
-// בקשות ללא origin, כל תהליך מקומי שמגיע ל-localhost:3000 היה יכול לגרום
-// למחשב להוריד ולהריץ קוד חדש. עדכון גרסה נעשה ידנית.
+// היה כאן /api/update והוא הוסר בצדק: נתיב ללא אימות שהריץ git pull או
+// הוריד ZIP והחליף קוד דרך PowerShell, בזמן שה-CORS אישר גם בקשות ללא
+// Origin - כלומר כל תהליך מקומי יכול היה להחליף את הקוד שרץ במחשב.
+//
+// מה שהשתנה מאז, ולכן זה חוזר: יש בדיקת Origin ואימות, המאגר מקובע בקוד
+// ואינו פרמטר, הקובץ נבדק מול חתימת ה-sha256 שהפרסום נושא, ושום דבר
+// מתוך הארכיון אינו מורץ - הוא נפרס ומועתק בלבד, אחרי גיבוי.
 // ---------------------------------------------------------------------------
+app.get('/api/update/check', async (req, res) => {
+  try {
+    res.json({ success: true, data: await updater.checkForUpdate() });
+  } catch (e) {
+    res.status(e.status || 502).json({ success: false, error: e.message });
+  }
+});
+
+app.post('/api/update/apply', async (req, res) => {
+  const dryRun = Boolean(req.body && req.body.dryRun);
+  try {
+    const out = await updater.applyUpdate({ dryRun });
+    auditLog('update_apply', { dryRun }, out.updated ? 'success' : 'skipped',
+             out.updated ? `${out.from} -> ${out.to}` : (out.reason || ''));
+    res.json({ success: true, data: out });
+  } catch (e) {
+    auditLog('update_apply', { dryRun }, 'denied', e.message);
+    res.status(e.status || 500).json({ success: false, error: e.message });
+  }
+});
 
 // כיבוי שרת ה-Bridge לפי בקשת המשתמש
 app.post('/api/shutdown', (req, res) => {
