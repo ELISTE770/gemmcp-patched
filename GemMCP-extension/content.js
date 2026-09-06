@@ -1522,7 +1522,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       '.stop-button',
       '.stop-btn',
       'mat-icon[data-mat-icon-name="stop"]',
-      'mat-icon[fonticon="stop"]'
+      'mat-icon[fonticon="stop"]',
+      // תוספת של האתר הנוכחי. הבוררים הכלליים שמעל תופסים כבר את רוב
+      // המקרים, כי כפתור עצירה נושא aria-label עם המילה stop כמעט תמיד.
+      ...(SITE.stop || [])
     ];
     
     for (const sel of stopSelectors) {
@@ -1563,14 +1566,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   function isElementAlreadyAnswered(el) {
     // בדיקה האם יש הודעת משתמש חדשה יותר או תוצאת MCP לאחר התשובה הזו
-    const currentTurn = el.closest('[data-test-id="conversation-turn"]') || el.closest('model-response') || el.closest('message-content') || el.closest('.model-response-text');
+    const currentTurn = SITE.turns ? el.closest(SITE.turns) : null;
     if (!currentTurn) return false;
 
     // בדיקת אחים עוקבים ב-DOM
     let nextNode = currentTurn.nextElementSibling;
     while (nextNode) {
       const text = nextNode.innerText || nextNode.textContent || '';
-      if (text.includes('[MCP Result]') || text.includes('MCP Result') || text.includes('תוצאת ביצוע') || nextNode.querySelector('[data-test-id="user-turn"], .user-query, user-message, [data-is-user="true"], user-query-container')) {
+      const answered = text.includes('[MCP Result]') || text.includes('MCP Result') ||
+                       text.includes('תוצאת ביצוע');
+      if (answered || (SITE.userTurns && nextNode.querySelector(SITE.userTurns))) {
         return true;
       }
       nextNode = nextNode.nextElementSibling;
@@ -1619,7 +1624,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       isInitialGracePeriod = false;
     }
 
-    const codeBlocks = Array.from(document.querySelectorAll('pre, code, .code-block, code-block, .formatted-code, .code-container, message-content, model-response, div.markdown'));
+    const GENERIC_BLOCKS = 'pre, code, .code-block, code-block, .formatted-code, .code-container, div.markdown';
+    // מיכלי ההודעות של האתר נוספים לגנריים ולא מחליפים אותם: בג'מיני הטקסט
+    // לפעמים יושב ב-message-content בלי pre עוטף, ובאתרים האחרים המצב מקביל.
+    const blockSelector = SITE.messages ? GENERIC_BLOCKS + ', ' + SITE.messages : GENERIC_BLOCKS;
+    const codeBlocks = Array.from(document.querySelectorAll(blockSelector));
     // בסריקה ידנית נבדוק מהסוף להתחלה כדי למצוא את הפקודה האחרונה ביותר
     const elements = forceRescan ? codeBlocks.reverse() : codeBlocks;
     let foundAndTriggered = false;
@@ -1649,7 +1658,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           }
 
           el.dataset.omniProcessed = 'true';
-          const parentTurn = el.closest('[data-test-id="conversation-turn"]') || el.closest('model-response') || el.closest('message-content');
+          const parentTurn = SITE.turns ? el.closest(SITE.turns) : null;
           if (parentTurn) parentTurn.dataset.omniProcessed = 'true';
 
           // אם מדובר בטעינה ראשונית של הדף או שההודעה הזו כבר נענתה בהיסטוריית הצ'אט (ולא נלחץ ריענון ידני)
@@ -1685,6 +1694,68 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   //
   // המצב נשמר לפי מזהה השיחה, כך שהוא שורד רענון ומעבר בין שיחות.
   // ---------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // מתאם אתר.
+  //
+  // רוב הקוד כאן אינו תלוי באתר, וזה לא במקרה: איתור תיבת הכתיבה נופל בסוף
+  // על contenteditable כללי, ההזרקה עוברת דרך execCommand - שהוא בדיוק מה
+  // ש-Angular של ג'מיני ו-ProseMirror של קלוד ו-ChatGPT מצפים לו כאחד -
+  // וסריקת הפקודות עובדת על pre ו-code שקיימים בכל השלושה.
+  //
+  // מה ששונה הוא ארבעה דברים, והם מרוכזים כאן: איך נראה מזהה שיחה בכתובת,
+  // מה עוטף תור בשיחה, מה מסמן הודעה של המשתמש, ואיך נראה כפתור העצירה.
+  //
+  // כל הבוררים כאן הם תוספת לגנריים ולא החלפה שלהם. בורר שהאתר ישנה מחר
+  // יפסיק להתאים, והשאר ימשיך לעבוד - במקום שהתוסף ייפול כולו.
+  // ---------------------------------------------------------------------------
+  const SITES = {
+    gemini: {
+      name: 'Gemini',
+      hosts: ['gemini.google.com'],
+      chatId: (p) => (p[0] === 'app' && p[1]) ? p[1] : null,
+      turns: '[data-test-id="conversation-turn"], model-response, message-content, .model-response-text',
+      userTurns: '[data-test-id="user-turn"], .user-query, user-message, [data-is-user="true"], user-query-container',
+      messages: 'message-content, model-response',
+      stop: ['mat-icon[data-mat-icon-name="stop"]', 'mat-icon[fonticon="stop"]']
+    },
+    claude: {
+      name: 'Claude',
+      hosts: ['claude.ai'],
+      chatId: (p) => (p[0] === 'chat' && p[1]) ? p[1] : null,
+      turns: '.font-claude-message, [data-testid="message"], [data-test-render-count]',
+      userTurns: '[data-testid="user-message"], .font-user-message',
+      messages: '.font-claude-message, [data-testid="message"]',
+      stop: ['button[aria-label*="Stop response" i]']
+    },
+    chatgpt: {
+      name: 'ChatGPT',
+      hosts: ['chatgpt.com', 'chat.openai.com'],
+      chatId: (p) => (p[0] === 'c' && p[1]) ? p[1] : null,
+      turns: '[data-testid^="conversation-turn"], article[data-turn], [data-message-author-role]',
+      userTurns: '[data-message-author-role="user"]',
+      messages: '[data-message-author-role="assistant"]',
+      stop: ['button[data-testid="stop-button"]']
+    }
+  };
+
+  const SITE = (() => {
+    const host = location.hostname;
+    for (const key of Object.keys(SITES)) {
+      if (SITES[key].hosts.includes(host)) return SITES[key];
+    }
+    // אתר שאינו ברשימה: הגנריים עדיין עובדים, ומזהה השיחה נגזר מהמקטע
+    // האחרון בכתובת. עדיף מאשר לא לפעול בכלל.
+    return {
+      name: host,
+      hosts: [host],
+      chatId: (p) => (p.length >= 2 ? p[p.length - 1] : null),
+      turns: '',
+      userTurns: '',
+      messages: '',
+      stop: []
+    };
+  })();
+
   const ACTIVATED_KEY = 'activatedChats';
   let activatedChats = new Set();
 
@@ -1695,7 +1766,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // הכיוון ההפוך היה שבור באותה מידה: ברגע שג'מיני משכתב את הכתובת
     // ל-/app/<id> באותה טעינה, השיחה שכן הופעלה איבדה את ההפעלה בשקט.
     const parts = location.pathname.split('/').filter(Boolean);
-    return (parts[0] === 'app' && parts[1]) ? parts[1] : null;
+    // הצורה שונה בכל אתר: ג'מיני /app/<id>, קלוד /chat/<id>, ChatGPT /c/<id>.
+    return SITE.chatId(parts);
   }
 
   // הפעלה שנעשתה בשיחה חדשה שאין לה עדיין מזהה. היא מוחזקת בזיכרון בלבד עד

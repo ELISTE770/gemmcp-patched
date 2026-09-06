@@ -9,8 +9,24 @@
 // שלושה מקומות בחרו tabs[0] מתוך query - כלומר לשונית שרירותית, לא זו שהמשתמש
 // רואה. מי שפתח כמה שיחות של ג'מיני קיבל את הפרומפט בצ'אט אחר לגמרי.
 // סדר העדיפויות: הפעילה בחלון שבחזית, אחר כך כל פעילה, ורק אז הראשונה.
+// האתרים שבהם התוסף פועל. מוגדר כאן, בראש הקובץ, כי הוא נקרא גם
+// מפונקציות שרצות מוקדם - const שמוצהר בהמשך היה נופל ב-TDZ, וזו כבר
+// הייתה תקלה בפרויקט הזה שלוש פעמים.
+const SUPPORTED_ORIGINS = [
+  'https://gemini.google.com/',
+  'https://claude.ai/',
+  'https://chatgpt.com/',
+  'https://chat.openai.com/'
+];
+const SUPPORTED_URL_MATCHES = SUPPORTED_ORIGINS.map((o) => o + '*');
+
+function isSupportedOrigin(url) {
+  return typeof url === 'string' && SUPPORTED_ORIGINS.some((o) => url.startsWith(o));
+}
+
 async function pickGeminiTab() {
-  const URL_MATCH = 'https://gemini.google.com/*';
+  // כל האתרים הנתמכים, לא רק ג'מיני. השם נשאר לשם תאימות עם הקוראים.
+  const URL_MATCH = SUPPORTED_URL_MATCHES;
   try {
     const focused = await chrome.tabs.query({ url: URL_MATCH, active: true, lastFocusedWindow: true });
     if (focused.length) return focused[0];
@@ -551,11 +567,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  // האתרים שמהם מתקבלות הוראות ביצוע. הרשאת הקריאה של התוסף רחבה יותר
+  // (Web Fetch קורא כל דף), אבל הוראה לבצע פעולה במחשב מתקבלת רק מכאן.
   if (request.action === 'EXECUTE_MCP_TOOL') {
     const from = sender && sender.tab && sender.tab.url;
-    if (!from || !from.startsWith('https://gemini.google.com/')) {
+    if (!isSupportedOrigin(from)) {
       console.warn('[GemMCP] בקשת ביצוע נדחתה. מקור:', from);
-      sendResponse({ success: false, error: 'בקשת ביצוע התקבלה ממקור שאינו הלשונית של ג׳מיני ונדחתה.' });
+      sendResponse({ success: false, error: 'בקשת ביצוע התקבלה ממקור שאינו לשונית נתמכת ונדחתה.' });
       return true;
     }
     handleOmniToolExecution(request.service, request.toolCall, request.config)
