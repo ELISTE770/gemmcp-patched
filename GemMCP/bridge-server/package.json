@@ -1,6 +1,6 @@
 {
   "name": "gemini-mcp-bridge-server",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "שרת הגשר המקומי של GemMCP (SB): הרשאות Windows, מסד מקומי וחיבור MCP עבור Gemini Web",
   "main": "server.js",
   "bin": "server.js",
