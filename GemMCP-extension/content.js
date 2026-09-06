@@ -1140,6 +1140,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   async function ensureWindowsBridgeRunning() {
     if (!activeServices.includes('windows')) return;
+
+    // מתג ההשהיה מבטיח שהגשר "לא יעלה מעצמו". הפונקציה הזו נקראת מלחיצה
+    // על הפעלה או על הצ'יפ של Windows - לחיצות מפורשות, אבל לא בקשה
+    // להעיר את הגשר. בלי הבדיקה, המתג היה נכבה בפועל ברגע שמפעילים שיחה.
+    try {
+      const nap = await chrome.storage.sync.get(['bridgeAsleep']);
+      if (nap && nap.bridgeAsleep) {
+        addLog('התוסף מושהה - הגשר לא הופעל. כבה את מתג ההשהיה בפופאפ.');
+        return;
+      }
+    } catch (e) { /* כשל אחסון אינו סיבה לחסום */ }
+
     try {
       // דרך ה-service worker ולא fetch מהדף: מדיניות Local Network Access
       // חוסמת גישה מהקשר הדף ל-localhost, ולכן הבדיקה כאן נכשלה תמיד והפעילה
