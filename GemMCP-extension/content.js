@@ -4,7 +4,7 @@
  */
 
 (function () {
-  console.log('%c[GemMCP] 🚀 GemMCP Hub פעיל ומוכן על Gemini!', 'color: #3b82f6; font-weight: bold; font-size: 14px;');
+  console.log(`%c[GemMCP] 🚀 GemMCP Hub פעיל ומוכן על ${SITE.name}!`, 'color: #3b82f6; font-weight: bold; font-size: 14px;');
 
   function showToast(message, type = 'info') {
     let container = document.getElementById('gemmcp-toast-container');
@@ -953,11 +953,24 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // Gemini 3.1 Pro מסרב לפרומפט ההפעלה ועונה משהו בסגנון "I cannot adopt this
   // setup". בלי לזהות את זה, המשתמש רואה שכלום לא עובד ומסיק שהכלי שבור -
   // בזמן שכל מה שצריך הוא להחליף דגם. Flash מקבל את הפרומפט.
+  // הרשימה הזו הייתה מכוונת לניסוח של Gemini Pro בלבד. כשהתוסף התחיל
+  // לפעול גם בקלוד וב-ChatGPT, סירוב שלהם לא זוהה כלל - המשתמש ראה שיחה
+  // שלא קורה בה כלום ולא הבין למה. הניסוחים שנוספו כאן נלקחו מסירוב אמיתי
+  // שנמדד באתר, לא מניחוש.
   const REFUSAL_MARKERS = [
     'cannot adopt', 'can not adopt', "can't adopt",
     'cannot output json', 'unable to interact with external',
     'i am an ai assistant designed to help with information',
-    'לא אוכל לאמץ', 'אינני יכול לבצע פעולות'
+    'לא אוכל לאמץ', 'אינני יכול לבצע פעולות',
+
+    // קלוד, מילה במילה: "I don't actually have a tool integration like this"
+    'tool integration like this',
+    "don't have a tool integration", 'do not have a tool integration',
+
+    // ניסוחים נפוצים נוספים. מכוונים מספיק כדי לא לתפוס שיחה רגילה על קבצים.
+    "can't run commands on your", 'cannot run commands on your',
+    "don't have access to your file system", 'no access to your file system',
+    "i'm not able to execute", 'i am not able to execute'
   ];
 
   function watchForModelRefusal() {
@@ -966,13 +979,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       if (++checks > 20) { clearInterval(timer); return; }
       const main = document.querySelector('main') || document.body;
       const tail = (main.innerText || '').slice(-1500).toLowerCase();
-      if (tail.includes('מוכן')) { clearInterval(timer); return; }
+      // אישור המוכנות מגיע בעברית מג'מיני ובאנגלית מהאחרים.
+      if (tail.includes('מוכן') || tail.includes('ready')) { clearInterval(timer); return; }
       if (REFUSAL_MARKERS.some((m) => tail.includes(m))) {
         clearInterval(timer);
         const model = readSelectedModel();
+        // העצה 'עבור ל-Flash' נכונה רק בג'מיני. על מסך של קלוד היא מבלבלת.
+        const advice = SITE.name === 'Gemini'
+          ? 'עבור ל-Flash בבורר הדגמים והפעל שוב.'
+          : 'נסה דגם אחר, או בקש מהדגם במפורש להחזיר את בלוק ה-JSON.';
         addLog(
-          'הדגם' + (model ? ' (' + model + ')' : '') + ' סירב להפעלה. זו מגבלה של הדגם ולא תקלה בתוסף - ' +
-          'עבור ל-Flash בבורר הדגמים של ג׳מיני והפעל שוב.',
+          'הדגם' + (model ? ' (' + model + ')' : '') + ' סירב להפעלה. זו מגבלה של הדגם ולא תקלה בתוסף - ' + advice,
           { error: true }
         );
       }
@@ -1337,7 +1354,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       //    בלי תקרה נפרדת לולאה זו נמשכת לנצח כשג'מיני נתקע במצב "מייצר".
       if (isGeminiGenerating()) {
         if (!hasLoggedWaiting) {
-          addLog('ממתין לסיום התשובה של Gemini כדי לשלוח תוצאה...');
+          addLog(`ממתין לסיום התשובה של ${SITE.name} כדי לשלוח תוצאה...`);
           hasLoggedWaiting = true;
         }
         generatingWaits++;
@@ -1445,7 +1462,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             clearInterval(activeSendInterval);
             activeSendInterval = null;
           }
-          console.log('%c[GemMCP] התשובה נשלחה בהצלחה ל-Gemini!', 'color: #10b981; font-weight: bold;');
+          console.log(`%c[GemMCP] התשובה נשלחה בהצלחה ל-${SITE.name}!`, 'color: #10b981; font-weight: bold;');
         } else if (attempts >= maxAttempts) {
           if (activeSendInterval) {
             clearInterval(activeSendInterval);
@@ -1722,9 +1739,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       name: 'Claude',
       hosts: ['claude.ai'],
       chatId: (p) => (p[0] === 'chat' && p[1]) ? p[1] : null,
-      turns: '.font-claude-message, [data-testid="message"], [data-test-render-count]',
-      userTurns: '[data-testid="user-message"], .font-user-message',
-      messages: '.font-claude-message, [data-testid="message"]',
+
+      // נמדד באתר החי, לא נוחש. הניחוש הראשון (.font-claude-message,
+      // [data-testid="message"]) החזיר אפס על שניהם.
+      //
+      // המבנה בפועל: [data-test-render-count] עוטף תור, בין של המשתמש ובין
+      // של קלוד, וההבחנה היא לפי צאצא user-message. אין מחלקה ייעודית
+      // לתשובה, ולכן :has() הוא מה שמבודד אותה - וזה חשוב: בלי הבידול,
+      // הסורק היה קורא גם את הודעות המשתמש, כולל ההנחיות שהתוסף עצמו
+      // הזריק - ובהן דוגמאות JSON שהיו מורצות כאילו היו פקודות אמיתיות.
+      turns: '[data-test-render-count]',
+      userTurns: '[data-testid="user-message"]',
+      messages: '[data-test-render-count]:not(:has([data-testid="user-message"]))',
       stop: ['button[aria-label*="Stop response" i]']
     },
     chatgpt: {
@@ -2043,7 +2069,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // מי שבחר "אוטונומי" מהפופאפ קיבל בקשת אישור על כל פעולה, כולל קריאה.
     const autoRun = autoRunScope === 'all' ||
       (autoToggle ? autoToggle.checked : isAutoExecute);
-    addLog(`זוהתה בקשה מ-Gemini עבור [${service}]: ${toolCall.action || toolCall.tool_name || 'execute'}`);
+    addLog(`זוהתה בקשה מ-${SITE.name} עבור [${service}]: ${toolCall.action || toolCall.tool_name || 'execute'}`);
 
     // פעולות בלתי הפיכות או בעלות טווח בלתי מוגבל דורשות אישור *תמיד*, גם כאשר
     // ההרצה האוטומטית דלוקה. הרצת PowerShell או כתיבה לקובץ הן לא משהו שכדאי
@@ -2440,7 +2466,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     try {
       chrome.storage.sync.get(null, (config) => {
         if (chrome.runtime.lastError) {
-          addLog('נא לרענן את דף Gemini (F5) לסנכרון התוסף');
+          addLog(`נא לרענן את הדף (F5) לסנכרון התוסף`);
           clearTimeout(executionTimeout);
           isExecuting = false;
           setBadgeBusy(false);

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "GemMCP (SB)",
-  "version": "1.4.0",
-  "version_name": "1.4.0",
+  "version": "1.4.1",
+  "version_name": "1.4.1",
   "description": "מחבר את Gemini, Claude ו-ChatGPT למחשב ולשירותי MCP (Supabase, GitHub, Web Scraper) עם אישור לכל פעולה.",
   "permissions": [
     "storage",
