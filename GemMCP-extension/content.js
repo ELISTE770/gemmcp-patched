@@ -4,7 +4,10 @@
  */
 
 (function () {
-  console.log(`%c[GemMCP] 🚀 GemMCP Hub פעיל ומוכן על ${SITE.name}!`, 'color: #3b82f6; font-weight: bold; font-size: 14px;');
+  // שורת "פעיל ומוכן" עברה ל-initExtension ולא נשארה כאן: היא מדפיסה את
+  // SITE.name, ו-SITE הוא const שמוגדר בהמשך הקובץ. קריאה אליו מכאן נפלה
+  // ב-TDZ (Cannot access 'SITE' before initialization) והפילה את כל ה-content
+  // script כבר בשורה הראשונה - כך שהווידג'ט הצף לא נוצר בכלל.
 
   function showToast(message, type = 'info') {
     let container = document.getElementById('gemmcp-toast-container');
@@ -3054,6 +3057,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   });
 
   function initExtension() {
+    console.log(`%c[GemMCP] 🚀 GemMCP Hub פעיל ומוכן על ${SITE.name}!`, 'color: #3b82f6; font-weight: bold; font-size: 14px;');
     createFloatingUI();
     observeGeminiResponses();
     attachUserIntentInterceptor();
